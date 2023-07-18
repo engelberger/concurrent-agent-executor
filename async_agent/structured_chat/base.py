@@ -27,6 +27,16 @@ class StructuredChatAgent(Agent):
     )
 
     @property
+    def system_prefix(self) -> str:
+        """Prefix to append the system message with.
+
+        This is used when the agent decides to use a tool that returns a promise, 
+        as the agent will invoke it but the system will run it and respond with 
+        the result.
+        """
+        return "System: "
+
+    @property
     def observation_prefix(self) -> str:
         """Prefix to append the observation with."""
         return "Observation: "
@@ -79,6 +89,7 @@ class StructuredChatAgent(Agent):
         tool_strings = []
         for tool in tools:
             args_schema = re.sub("}", "}}}}", re.sub("{", "{{{{", str(tool.args)))
+            # ? NOTE: Tools must include schema for args
             tool_strings.append(f"{tool.name}: {tool.description}, args: {args_schema}")
         formatted_tools = "\n".join(tool_strings)
         tool_names = ", ".join([tool.name for tool in tools])

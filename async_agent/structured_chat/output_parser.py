@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 from pydantic import Field
 
@@ -11,7 +11,6 @@ from langchain.agents.agent import AgentOutputParser
 from langchain.agents.structured_chat.prompt import FORMAT_INSTRUCTIONS
 from langchain.output_parsers import OutputFixingParser
 from langchain.schema import AgentAction, AgentFinish, OutputParserException
-from langchain.schema.language_model import BaseLanguageModel
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +66,7 @@ class StructuredChatOutputParserWithRetries(AgentOutputParser):
     @classmethod
     def from_llm(
         cls,
-        llm: Optional[BaseLanguageModel] = None,
+        llm: Optional[Any] = None,
         base_parser: Optional[StructuredChatOutputParser] = None,
     ) -> StructuredChatOutputParserWithRetries:
         if llm is not None:
