@@ -7,4 +7,6 @@ dependencies:
     - promisio
     - openai
     - streamlit
+    - aioconsole
+    - pyee
   - langchain

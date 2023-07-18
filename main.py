@@ -1,47 +1,76 @@
-import streamlit as st
-from streamlit_chat import message
-import requests
+"""
+generate a random number between 1 and 10, if it is greater than 5 say "eureka", otherwise say "sha"
+"""
 
-st.set_page_config(page_title="AsyncAgent", page_icon=":robot:")
+import aioconsole
+import asyncio
+import random
 
-st.header("Streamlit Chat - Demo")
+from typing import Any
+from langchain.chat_models import ChatOpenAI
+from dotenv import load_dotenv
 
-if "generated" not in st.session_state:
-    st.session_state["generated"] = []
+from pydantic import BaseModel
 
-if "past" not in st.session_state:
-    st.session_state["past"] = []
+from async_agent import AsyncAgentExecutor, BaseParallelizableTool, WaitTool
+from async_agent.structured_chat import StructuredChatAgent
 
-
-# def query(payload):
-#     response = requests.post(API_URL, headers=headers, json=payload)
-#     return response.json()
-
-
-def get_text():
-    input_text = st.text_input("You: ", "Hello, how are you?", key="input")
-    return input_text
+load_dotenv()
 
 
-user_input = get_text()
+class RandomNumberToolSchema(BaseModel):
+    a: int
+    b: int
 
-if user_input:
-    # output = query(
-    #     {
-    #         "inputs": {
-    #             "past_user_inputs": st.session_state.past,
-    #             "generated_responses": st.session_state.generated,
-    #             "text": user_input,
-    #         },
-    #         "parameters": {"repetition_penalty": 1.33},
-    #     }
-    # )
-    output = {"generated_text": "Hello, how are you?"}
 
-    st.session_state.past.append(user_input)
-    st.session_state.generated.append(output["generated_text"])
+class RandomNumberTool(BaseParallelizableTool):
+    is_parallelizable = True
 
-if st.session_state["generated"]:
-    for i in range(len(st.session_state["generated"]) - 1, -1, -1):
-        message(st.session_state["generated"][i], key=str(i))
-        message(st.session_state["past"][i], is_user=True, key=str(i) + "_user")
+    name = "RandomNumber"
+    description = "Generates a random number between a and b"
+    args_schema: RandomNumberToolSchema = RandomNumberToolSchema
+
+    def _run(self, a, b):
+        n = random.randint(a, b)
+        return f"The random number is: {n}"
+
+    def _arun(self, *args: Any, **kwargs: Any):
+        return self._run(*args, **kwargs)
+
+
+async def main():
+    def on_message(who, message):
+        print(f"\n{who}: {message}\n")
+
+    llm = ChatOpenAI()
+
+    tools = [
+        RandomNumberTool(),
+        WaitTool(),
+    ]
+
+    agent = StructuredChatAgent.from_llm_and_tools(
+        llm=llm,
+        tools=tools,
+    )
+
+    executor = AsyncAgentExecutor.from_agent_and_tools(
+        agent=agent,
+        tools=tools,
+        # verbose=True,
+        # return_intermediate_steps=True,
+    )
+
+    with executor:
+        executor.emitter.on("message", on_message)
+
+        while True:
+            try:
+                _input = await aioconsole.ainput(">>> ")
+                executor({"input": _input})
+            except KeyboardInterrupt:
+                break
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
