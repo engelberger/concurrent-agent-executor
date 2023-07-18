@@ -1,56 +1,47 @@
-import random
-import asyncio
-from typing import Any, Coroutine
+import streamlit as st
+from streamlit_chat import message
+import requests
 
-from dotenv import load_dotenv
-from promisio import promisify
+st.set_page_config(page_title="AsyncAgent", page_icon=":robot:")
 
-# from langchain.llms import OpenAI
-from langchain.chat_models import ChatOpenAI
-from pydantic import BaseModel
+st.header("Streamlit Chat - Demo")
 
-from async_agent import AgentExecutor, BaseToolMaybePromise
-from async_agent.structured_chat import StructuredChatAgent
+if "generated" not in st.session_state:
+    st.session_state["generated"] = []
 
-load_dotenv()
-
-llm = ChatOpenAI()
+if "past" not in st.session_state:
+    st.session_state["past"] = []
 
 
-@promisify
-async def get_random_number(a: int, b: int) -> int:
-    asyncio.sleep(5)
-    return random.randint(a, b)
+# def query(payload):
+#     response = requests.post(API_URL, headers=headers, json=payload)
+#     return response.json()
 
 
-class RandomNumberToolSchema(BaseModel):
-    a: int
-    b: int
+def get_text():
+    input_text = st.text_input("You: ", "Hello, how are you?", key="input")
+    return input_text
 
 
-class RandomNumberTool(BaseToolMaybePromise):
-    name = "random_number"
-    description = "Get a random number between a and b"
-    # args_schema = RandomNumberToolSchema
+user_input = get_text()
 
-    is_promise = True
+if user_input:
+    # output = query(
+    #     {
+    #         "inputs": {
+    #             "past_user_inputs": st.session_state.past,
+    #             "generated_responses": st.session_state.generated,
+    #             "text": user_input,
+    #         },
+    #         "parameters": {"repetition_penalty": 1.33},
+    #     }
+    # )
+    output = {"generated_text": "Hello, how are you?"}
 
-    def _run(self, a: int, b: int) -> Any:
-        return get_random_number(a, b)
+    st.session_state.past.append(user_input)
+    st.session_state.generated.append(output["generated_text"])
 
-    async def _arun(self, a: int, b: int) -> Coroutine[Any, Any, Any]:
-        return await self._run(a, b)
-
-
-tools = [RandomNumberTool()]
-
-agent = StructuredChatAgent.from_llm_and_tools(
-    llm=llm,
-    tools=tools,
-    verbose=True,
-    return_intermediate_steps=True,
-)
-
-executor = AgentExecutor.from_agent_and_tools(agent=agent, tools=tools)
-
-print(executor.run({"input": "Generate a random number between 1 and 10"}))
+if st.session_state["generated"]:
+    for i in range(len(st.session_state["generated"]) - 1, -1, -1):
+        message(st.session_state["generated"][i], key=str(i))
+        message(st.session_state["past"][i], is_user=True, key=str(i) + "_user")

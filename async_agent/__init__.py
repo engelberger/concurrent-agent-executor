@@ -700,33 +700,33 @@ s
             agent=agent, tools=tools, callback_manager=callback_manager, **kwargs
         )
 
-    # @root_validator()
-    # def validate_tools(cls, values: Dict) -> Dict:
-    #     """Validate that tools are compatible with agent."""
-    #     agent = values["agent"]
-    #     tools = values["tools"]
-    #     allowed_tools = agent.get_allowed_tools()
-    #     if allowed_tools is not None:
-    #         if set(allowed_tools) != set([tool.name for tool in tools]):
-    #             raise ValueError(
-    #                 f"Allowed tools ({allowed_tools}) different than "
-    #                 f"provided tools ({[tool.name for tool in tools]})"
-    #             )
-    #     return values
+    @root_validator()
+    def validate_tools(cls, values: Dict) -> Dict:
+        """Validate that tools are compatible with agent."""
+        agent = values["agent"]
+        tools = values["tools"]
+        allowed_tools = agent.get_allowed_tools()
+        if allowed_tools is not None:
+            if set(allowed_tools) != set([tool.name for tool in tools]):
+                raise ValueError(
+                    f"Allowed tools ({allowed_tools}) different than "
+                    f"provided tools ({[tool.name for tool in tools]})"
+                )
+        return values
 
-    # @root_validator()
-    # def validate_return_direct_tool(cls, values: Dict) -> Dict:
-    #     """Validate that tools are compatible with agent."""
-    #     agent = values["agent"]
-    #     tools = values["tools"]
-    #     if isinstance(agent, BaseMultiActionAgent):
-    #         for tool in tools:
-    #             if tool.return_direct:
-    #                 raise ValueError(
-    #                     "Tools that have `return_direct=True` are not allowed "
-    #                     "in multi-action agents"
-    #                 )
-    #     return values
+    @root_validator()
+    def validate_return_direct_tool(cls, values: Dict) -> Dict:
+        """Validate that tools are compatible with agent."""
+        agent = values["agent"]
+        tools = values["tools"]
+        if isinstance(agent, BaseMultiActionAgent):
+            for tool in tools:
+                if tool.return_direct:
+                    raise ValueError(
+                        "Tools that have `return_direct=True` are not allowed "
+                        "in multi-action agents"
+                    )
+        return values
 
     def save(self, file_path: Union[Path, str]) -> None:
         """Raise error - saving not supported for Agent Executors."""
