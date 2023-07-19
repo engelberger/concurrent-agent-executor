@@ -29,3 +29,9 @@ python examples/slow_random_number.py
 ```console
 conda env create -f environment.yml
 ```
+
+## Ideas
+
+### [Branch prediction](https://en.wikipedia.org/wiki/Branch_predictor) and hypothesizing
+
+![Diagram showing branch prediction capabilities of the agent](assets/hypothesizing.png)
