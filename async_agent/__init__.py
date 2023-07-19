@@ -33,7 +33,6 @@ from async_agent.tools import BaseParallelizableTool
 class AsyncAgentExecutor(AgentExecutor):
     """Consists of an agent using tools."""
 
-    # agent: Union[BaseSingleActionAgent, BaseMultiActionAgent]
     agent: AsyncStructuredChatAgent
     """The agent to run for creating a plan and determining actions
     to take at each step of the execution loop."""
@@ -146,9 +145,6 @@ s
             args=(agent_action.tool_input,),
             kwds={
                 "job_id": job_id,
-                # "verbose": self.verbose,
-                # "color": color,
-                # "callbacks": run_manager.get_child() if run_manager else None,
                 **tool_run_kwargs,
             },
             callback=lambda _: self._tool_callback(

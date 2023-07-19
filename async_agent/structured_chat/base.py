@@ -4,10 +4,7 @@ from typing import Any, List, Optional, Sequence, Tuple, Union
 from pydantic import Field
 
 from langchain.agents.agent import Agent, AgentOutputParser
-from langchain.agents.structured_chat.output_parser import (
-    StructuredChatOutputParserWithRetries,
-)
-from langchain.agents.structured_chat.prompt import FORMAT_INSTRUCTIONS, PREFIX, SUFFIX
+
 from langchain.callbacks.base import BaseCallbackManager
 from langchain.chains.llm import LLMChain
 from langchain.prompts.chat import (
@@ -19,6 +16,10 @@ from langchain.schema import AgentAction, AgentFinish
 from langchain.callbacks.manager import Callbacks
 
 from async_agent.tools import BaseParallelizableTool
+from async_agent.structured_chat.output_parser import (
+    StructuredChatOutputParserWithRetries,
+)
+from async_agent.structured_chat.prompt import FORMAT_INSTRUCTIONS, PREFIX, SUFFIX
 
 HUMAN_MESSAGE_TEMPLATE = "{input}\n\n{agent_scratchpad}"
 
