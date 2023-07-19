@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "async_agent"
+name = "concurrent_agent_executor"
 version = "0.0.1"
 authors = [{ name = "Alen Rubilar", email = "lclc.alen@gmail.com" }]
-description = "An async runtime for language agents"
+description = "An concurrent runtime for tool-enhanced language agents"
 readme = "README.md"
 requires-python = ">=3.7"

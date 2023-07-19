@@ -15,18 +15,22 @@ from langchain.prompts.chat import (
 from langchain.schema import AgentAction, AgentFinish
 from langchain.callbacks.manager import Callbacks
 
-from async_agent.tools import BaseParallelizableTool
-from async_agent.structured_chat.output_parser import (
+from concurrent_agent_executor.tools import BaseParallelizableTool
+from concurrent_agent_executor.structured_chat.output_parser import (
     StructuredChatOutputParserWithRetries,
 )
-from async_agent.structured_chat.prompt import FORMAT_INSTRUCTIONS, PREFIX, SUFFIX
+from concurrent_agent_executor.structured_chat.prompt import (
+    FORMAT_INSTRUCTIONS,
+    PREFIX,
+    SUFFIX,
+)
 
 HUMAN_MESSAGE_TEMPLATE = "{input}\n\n{agent_scratchpad}"
 
 SYSTEM_MESSAGE_TEMPLATE = "{input}\n\n{agent_scratchpad}"
 
 
-class AsyncStructuredChatAgent(Agent):
+class ConcurrentStructuredChatAgent(Agent):
     system_llm_chain: LLMChain
 
     output_parser: AgentOutputParser = Field(

@@ -25,16 +25,16 @@ from langchain.schema import (
 )
 from langchain.utilities.asyncio import asyncio_timeout
 from human_id import generate_id
-from async_agent.structured_chat.base import AsyncStructuredChatAgent
-from async_agent.structured_chat.prompt import START_BACKGROUND_JOB
 
-from async_agent.tools import BaseParallelizableTool
+from concurrent_agent_executor.structured_chat.base import ConcurrentStructuredChatAgent
+from concurrent_agent_executor.structured_chat.prompt import START_BACKGROUND_JOB
+from concurrent_agent_executor.tools import BaseParallelizableTool
 
 
-class AsyncAgentExecutor(AgentExecutor):
+class ConcurrentAgentExecutor(AgentExecutor):
     """Consists of an async agent using tools."""
 
-    agent: AsyncStructuredChatAgent
+    agent: ConcurrentStructuredChatAgent
     """The agent to run for creating a plan and determining actions
     to take at each step of the execution loop."""
     tools: Sequence[BaseParallelizableTool]
@@ -44,7 +44,7 @@ class AsyncAgentExecutor(AgentExecutor):
     pool: Any  # pool: Pool
     emitter: Any  # emitter: AsyncIOEventEmitter
 
-    def __enter__(self) -> AsyncAgentExecutor:
+    def __enter__(self) -> ConcurrentAgentExecutor:
         self.lock = Lock()
         self.pool = Pool()
         self.emitter = AsyncIOEventEmitter()

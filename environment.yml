@@ -1,15 +1,15 @@
-name: async_agent
+name: concurrent_agent_executor
 channels:
   - defaults
   - conda-forge
 dependencies:
   - pip:
-      - promisio
-      - openai
       - streamlit
-      - aioconsole
-      - pyee
       - textual
+      - aioconsole
+
+      - openai
+      - pyee
       - langchain==0.0.231
       - human-id
       - colorama

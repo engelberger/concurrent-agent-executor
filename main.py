@@ -7,7 +7,7 @@ import asyncio
 import random
 import time
 
-from typing import Any, Dict
+from typing import Any
 from langchain.chat_models import ChatOpenAI
 from dotenv import load_dotenv
 from langchain.prompts import MessagesPlaceholder
@@ -16,9 +16,9 @@ from langchain.memory import ConversationBufferMemory
 from pydantic import BaseModel, Field
 from colorama import Back, Style
 
-from async_agent import AsyncAgentExecutor, BaseParallelizableTool
-from async_agent.tools import WaitTool
-from async_agent.structured_chat import AsyncStructuredChatAgent
+from concurrent_agent_executor import ConcurrentAgentExecutor, BaseParallelizableTool
+from concurrent_agent_executor.tools import WaitTool
+from concurrent_agent_executor.structured_chat import ConcurrentStructuredChatAgent
 
 load_dotenv()
 
@@ -81,14 +81,14 @@ async def main():
     chat_history = MessagesPlaceholder(variable_name="chat_history")
     memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
 
-    agent = AsyncStructuredChatAgent.from_llm_and_tools(
+    agent = ConcurrentStructuredChatAgent.from_llm_and_tools(
         llm=llm,
         tools=tools,
         memory_prompts=[chat_history],
         input_variables=["input", "agent_scratchpad", "chat_history"],
     )
 
-    executor = AsyncAgentExecutor.from_agent_and_tools(
+    executor = ConcurrentAgentExecutor.from_agent_and_tools(
         agent=agent,
         tools=tools,
         memory=memory,
