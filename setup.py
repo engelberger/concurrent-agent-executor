@@ -1,5 +1,5 @@
 import os
-from setuptools import setup
+from setuptools import setup, find_packages
 
 
 def read(fname):
@@ -13,7 +13,7 @@ setup(
     author_email="lclc.alen@gmail.com",
     description="An async runtime for language agents",
     keywords="async agent runtime langchain",
-    packages=["async_agent"],
+    packages=find_packages(),
     long_description=read("README.md"),
     classifiers=[
         "Development Status :: 3 - Alpha",
