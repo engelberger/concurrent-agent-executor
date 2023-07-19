@@ -1,5 +1,7 @@
 # `concurrent-agent-executor`
 
+![Diagram showing non-blocking capabilities of the agent](assets/non_blocking.png)
+
 An concurrent runtime for tool-enhanced language agents.
 
 ## Getting Started
