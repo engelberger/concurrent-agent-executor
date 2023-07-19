@@ -26,6 +26,7 @@ from langchain.schema import (
     OutputParserException,
 )
 from langchain.utilities.asyncio import asyncio_timeout
+from human_id import generate_id
 
 from async_agent.tools import BaseParallelizableTool
 
@@ -225,9 +226,15 @@ s
 
         return final_output
 
-    def _tool_callback(self, output: Any) -> None:
+    def _tool_callback(
+        self,
+        output: Any,
+        job_id: Optional[str] = None,
+        tool: Optional[BaseParallelizableTool] = None,
+        agent_action: Optional[AgentAction] = None,
+    ) -> None:
         self.emitter.emit("message", "tool", output)
-        self({"input": output})
+        self({"input": f"Tool {tool.name} with job_id {job_id} finished: {output}"})
 
     def _start_parallelizable_tool(
         self,
@@ -237,20 +244,28 @@ s
         run_manager: Optional[CallbackManagerForChainRun] = None,
         **tool_run_kwargs,
     ) -> Any:
+        job_id = generate_id()
+
         self.pool.apply_async(
             tool.run,
             args=(agent_action.tool_input,),
             kwds={
-                "verbose": self.verbose,
-                "color": color,
-                "callbacks": run_manager.get_child() if run_manager else None,
+                "job_id": job_id,
+                # "verbose": self.verbose,
+                # "color": color,
+                # "callbacks": run_manager.get_child() if run_manager else None,
                 **tool_run_kwargs,
             },
-            callback=self._tool_callback,
+            callback=lambda _: self._tool_callback(
+                _,
+                job_id=job_id,
+                tool=tool,
+                agent_action=agent_action,
+            ),
         )
 
         # ! TODO: Better prompting
-        return "Scheduled"
+        return f"Running {tool.name} in the background with job_id {job_id}"
 
     async def _astart_parallelizable_tool(
         self,

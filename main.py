@@ -14,6 +14,7 @@ from langchain.prompts import MessagesPlaceholder
 from langchain.prompts import MessagesPlaceholder
 from langchain.memory import ConversationBufferMemory
 from pydantic import BaseModel
+from colorama import Back, Style
 
 from async_agent import AsyncAgentExecutor, BaseParallelizableTool
 from async_agent.tools import WaitTool
@@ -48,7 +49,7 @@ class RandomNumberTool(BaseParallelizableTool):
 
 async def main():
     def on_message(who, message):
-        print(f"\n{who}: {message}\n")
+        print(f"\n{Back.GREEN}{who}{Style.RESET_ALL}: {message}\n")
 
     llm = ChatOpenAI()
 
