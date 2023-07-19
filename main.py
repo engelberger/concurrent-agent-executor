@@ -5,14 +5,18 @@ generate a random number between 1 and 10, if it is greater than 5 say "eureka",
 import aioconsole
 import asyncio
 import random
+import time
 
 from typing import Any
 from langchain.chat_models import ChatOpenAI
 from dotenv import load_dotenv
-
+from langchain.prompts import MessagesPlaceholder
+from langchain.prompts import MessagesPlaceholder
+from langchain.memory import ConversationBufferMemory
 from pydantic import BaseModel
 
-from async_agent import AsyncAgentExecutor, BaseParallelizableTool, WaitTool
+from async_agent import AsyncAgentExecutor, BaseParallelizableTool
+from async_agent.tools import WaitTool
 from async_agent.structured_chat import StructuredChatAgent
 
 load_dotenv()
@@ -27,12 +31,16 @@ class RandomNumberTool(BaseParallelizableTool):
     is_parallelizable = True
 
     name = "RandomNumber"
-    description = "Generates a random number between a and b"
+    description = "Schedules a random number generation between a and b; once invoked, you must wait for the result to be ready"
     args_schema: RandomNumberToolSchema = RandomNumberToolSchema
 
     def _run(self, a, b):
-        n = random.randint(a, b)
-        return f"The random number is: {n}"
+        try:
+            time.sleep(5)
+            n = random.randint(a, b)
+            return f"The random number is: {n}"
+        except Exception as e:
+            return f"Error: {e}"
 
     def _arun(self, *args: Any, **kwargs: Any):
         return self._run(*args, **kwargs)
@@ -49,16 +57,22 @@ async def main():
         WaitTool(),
     ]
 
+    chat_history = MessagesPlaceholder(variable_name="chat_history")
+    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+
     agent = StructuredChatAgent.from_llm_and_tools(
         llm=llm,
         tools=tools,
+        memory_prompts=[chat_history],
+        input_variables=["input", "agent_scratchpad", "chat_history"],
     )
 
     executor = AsyncAgentExecutor.from_agent_and_tools(
         agent=agent,
         tools=tools,
-        # verbose=True,
+        verbose=True,
         # return_intermediate_steps=True,
+        memory=memory,
     )
 
     with executor:
@@ -67,7 +81,11 @@ async def main():
         while True:
             try:
                 _input = await aioconsole.ainput(">>> ")
-                executor({"input": _input})
+                executor(
+                    {
+                        "input": _input,
+                    }
+                )
             except KeyboardInterrupt:
                 break
 

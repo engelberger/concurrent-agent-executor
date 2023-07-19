@@ -5,11 +5,8 @@ from __future__ import annotations
 import asyncio
 import time
 from multiprocessing import Lock, Pool
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from pyee import AsyncIOEventEmitter
-
-from pydantic import root_validator
 
 from langchain.agents.tools import InvalidTool
 from langchain.agents.agent import (
@@ -18,12 +15,9 @@ from langchain.agents.agent import (
     ExceptionTool,
     AgentExecutor,
 )
-from langchain.callbacks.base import BaseCallbackManager
 from langchain.callbacks.manager import (
     AsyncCallbackManagerForChainRun,
-    AsyncCallbackManagerForToolRun,
     CallbackManagerForChainRun,
-    CallbackManagerForToolRun,
 )
 from langchain.input import get_color_mapping
 from langchain.schema import (
@@ -31,30 +25,9 @@ from langchain.schema import (
     AgentFinish,
     OutputParserException,
 )
-from langchain.tools.base import BaseTool
 from langchain.utilities.asyncio import asyncio_timeout
 
-
-class BaseParallelizableTool(BaseTool):
-    is_parallelizable: bool = False
-
-
-class WaitTool(BaseParallelizableTool):
-    name = "_Wait"
-    description = "Wait tool"
-    return_direct = True
-
-    def _run(
-        self,
-        run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> str:
-        return "Waiting"
-
-    async def _arun(
-        self,
-        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-    ) -> str:
-        return self._run(run_manager=run_manager)
+from async_agent.tools import BaseParallelizableTool
 
 
 class AsyncAgentExecutor(AgentExecutor):
@@ -104,91 +77,106 @@ s
     pool: Any  # pool: Pool
     emitter: Any  # emitter: AsyncIOEventEmitter
 
+    # @classmethod
+    # def from_agent_and_tools(
+    #     cls,
+    #     agent: Union[BaseSingleActionAgent, BaseMultiActionAgent],
+    #     tools: Sequence[BaseParallelizableTool],
+    #     callback_manager: Optional[BaseCallbackManager] = None,
+    #     **kwargs: Any,
+    # ) -> AgentExecutor:
+    #     """Create from agent and tools."""
+    #     return cls(
+    #         agent=agent, tools=tools, callback_manager=callback_manager, **kwargs
+    #     )
+
+    # @root_validator()
+    # def validate_tools(cls, values: Dict) -> Dict:
+    #     """Validate that tools are compatible with agent."""
+    #     agent = values["agent"]
+    #     tools = values["tools"]
+    #     allowed_tools = agent.get_allowed_tools()
+    #     if allowed_tools is not None:
+    #         if set(allowed_tools) != set([tool.name for tool in tools]):
+    #             raise ValueError(
+    #                 f"Allowed tools ({allowed_tools}) different than "
+    #                 f"provided tools ({[tool.name for tool in tools]})"
+    #             )
+    #     return values
+
+    # @root_validator()
+    # def validate_return_direct_tool(cls, values: Dict) -> Dict:
+    #     """Validate that tools are compatible with agent."""
+    #     agent = values["agent"]
+    #     tools = values["tools"]
+    #     if isinstance(agent, BaseMultiActionAgent):
+    #         for tool in tools:
+    #             if tool.return_direct:
+    #                 raise ValueError(
+    #                     "Tools that have `return_direct=True` are not allowed "
+    #                     "in multi-action agents"
+    #                 )
+    #     return values
+
+    # def save(self, file_path: Union[Path, str]) -> None:
+    #     """Raise error - saving not supported for Agent Executors."""
+    #     raise ValueError(
+    #         "Saving not supported for agent executors. "
+    #         "If you are trying to save the agent, please use the "
+    #         "`.save_agent(...)`"
+    #     )
+
+    # def save_agent(self, file_path: Union[Path, str]) -> None:
+    #     """Save the underlying agent."""
+    #     return self.agent.save(file_path)
+
+    # @property
+    # def input_keys(self) -> List[str]:
+    #     """Return the input keys.
+
+    #     :meta private:
+    #     """
+    #     return self.agent.input_keys
+
+    # @property
+    # def output_keys(self) -> List[str]:
+    #     """Return the singular output key.
+
+    #     :meta private:
+    #     """
+    #     if self.return_intermediate_steps:
+    #         return self.agent.return_values + ["intermediate_steps"]
+    #     else:
+    #         return self.agent.return_values
+
+    # def lookup_tool(self, name: str) -> BaseParallelizableTool:
+    #     """Lookup tool by name."""
+    #     return {tool.name: tool for tool in self.tools}[name]
+
+    # def _get_tool_return(
+    #     self, next_step_output: Tuple[AgentAction, str]
+    # ) -> Optional[AgentFinish]:
+    #     """Check if the tool is a returning tool."""
+    #     agent_action, observation = next_step_output
+    #     name_to_tool_map = {tool.name: tool for tool in self.tools}
+    #     # Invalid tools won't be in the map, so we return False.
+    #     if agent_action.tool in name_to_tool_map:
+    #         if name_to_tool_map[agent_action.tool].return_direct:
+    #             return AgentFinish(
+    #                 {self.agent.return_values[0]: observation},
+    #                 "",
+    #             )
+    #     return None
+
     def __enter__(self) -> AsyncAgentExecutor:
         self.lock = Lock()
         self.pool = Pool()
         self.emitter = AsyncIOEventEmitter()
         return self
 
-    def __exit__(self) -> None:
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
         self.pool.close()
         self.pool.join()
-
-    @classmethod
-    def from_agent_and_tools(
-        cls,
-        agent: Union[BaseSingleActionAgent, BaseMultiActionAgent],
-        tools: Sequence[BaseParallelizableTool],
-        callback_manager: Optional[BaseCallbackManager] = None,
-        **kwargs: Any,
-    ) -> AgentExecutor:
-        """Create from agent and tools."""
-        return cls(
-            agent=agent, tools=tools, callback_manager=callback_manager, **kwargs
-        )
-
-    @root_validator()
-    def validate_tools(cls, values: Dict) -> Dict:
-        """Validate that tools are compatible with agent."""
-        agent = values["agent"]
-        tools = values["tools"]
-        allowed_tools = agent.get_allowed_tools()
-        if allowed_tools is not None:
-            if set(allowed_tools) != set([tool.name for tool in tools]):
-                raise ValueError(
-                    f"Allowed tools ({allowed_tools}) different than "
-                    f"provided tools ({[tool.name for tool in tools]})"
-                )
-        return values
-
-    @root_validator()
-    def validate_return_direct_tool(cls, values: Dict) -> Dict:
-        """Validate that tools are compatible with agent."""
-        agent = values["agent"]
-        tools = values["tools"]
-        if isinstance(agent, BaseMultiActionAgent):
-            for tool in tools:
-                if tool.return_direct:
-                    raise ValueError(
-                        "Tools that have `return_direct=True` are not allowed "
-                        "in multi-action agents"
-                    )
-        return values
-
-    def save(self, file_path: Union[Path, str]) -> None:
-        """Raise error - saving not supported for Agent Executors."""
-        raise ValueError(
-            "Saving not supported for agent executors. "
-            "If you are trying to save the agent, please use the "
-            "`.save_agent(...)`"
-        )
-
-    def save_agent(self, file_path: Union[Path, str]) -> None:
-        """Save the underlying agent."""
-        return self.agent.save(file_path)
-
-    @property
-    def input_keys(self) -> List[str]:
-        """Return the input keys.
-
-        :meta private:
-        """
-        return self.agent.input_keys
-
-    @property
-    def output_keys(self) -> List[str]:
-        """Return the singular output key.
-
-        :meta private:
-        """
-        if self.return_intermediate_steps:
-            return self.agent.return_values + ["intermediate_steps"]
-        else:
-            return self.agent.return_values
-
-    def lookup_tool(self, name: str) -> BaseParallelizableTool:
-        """Lookup tool by name."""
-        return {tool.name: tool for tool in self.tools}[name]
 
     def _should_continue(self, iterations: int, time_elapsed: float) -> bool:
         if self.max_iterations is not None and iterations >= self.max_iterations:
@@ -238,7 +226,8 @@ s
         return final_output
 
     def _tool_callback(self, output: Any) -> None:
-        self._result({"input": output})
+        self.emitter.emit("message", "tool", output)
+        self({"input": output})
 
     def _start_parallelizable_tool(
         self,
@@ -654,18 +643,3 @@ s
                     return await self._areturn(
                         output, intermediate_steps, run_manager=run_manager
                     )
-
-    def _get_tool_return(
-        self, next_step_output: Tuple[AgentAction, str]
-    ) -> Optional[AgentFinish]:
-        """Check if the tool is a returning tool."""
-        agent_action, observation = next_step_output
-        name_to_tool_map = {tool.name: tool for tool in self.tools}
-        # Invalid tools won't be in the map, so we return False.
-        if agent_action.tool in name_to_tool_map:
-            if name_to_tool_map[agent_action.tool].return_direct:
-                return AgentFinish(
-                    {self.agent.return_values[0]: observation},
-                    "",
-                )
-        return None
