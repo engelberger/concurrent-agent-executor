@@ -7,7 +7,7 @@ import asyncio
 import random
 import time
 
-from typing import Any
+from typing import Any, Dict
 from langchain.chat_models import ChatOpenAI
 from dotenv import load_dotenv
 from langchain.prompts import MessagesPlaceholder
@@ -41,7 +41,11 @@ class RandomNumberTool(BaseParallelizableTool):
     description = "Schedules a random number generation between a and b; once invoked, you must wait for the result to be ready. Both a and b are integers."
     args_schema: RandomNumberToolSchema = RandomNumberToolSchema
 
-    def _run(self, a, b):
+    def _run(
+        self,
+        a: int,
+        b: int,
+    ):
         try:
             time.sleep(10)
             n = random.randint(a, b)
@@ -57,6 +61,8 @@ async def main():
     def on_message(who: str, message: str):
         if who.startswith("tool"):
             print(f"\n{Back.YELLOW}{who}{Style.RESET_ALL}: {message}\n")
+        elif who.startswith("error"):
+            print(f"\n{Back.RED}{who}{Style.RESET_ALL}: {message}\n")
         else:
             print(f"\n{Back.GREEN}{who}{Style.RESET_ALL}: {message}\n")
 
@@ -66,8 +72,10 @@ async def main():
     )
 
     tools = [
-        RandomNumberTool(),
         WaitTool(),
+        # CancelTool(),
+        # StatusTool(),
+        RandomNumberTool(),
     ]
 
     chat_history = MessagesPlaceholder(variable_name="chat_history")
@@ -96,6 +104,10 @@ async def main():
         while True:
             try:
                 _input = await aioconsole.ainput(">>> ")
+
+                if _input == "exit":
+                    raise KeyboardInterrupt
+
                 executor(
                     {
                         "input": _input,

@@ -4,9 +4,15 @@ channels:
   - conda-forge
 dependencies:
   - pip:
-    - promisio
-    - openai
-    - streamlit
-    - aioconsole
-    - pyee
-  - langchain
+      - promisio
+      - openai
+      - streamlit
+      - aioconsole
+      - pyee
+      - textual
+      - langchain==0.0.231
+      - human-id
+      - colorama
+      - pydantic
+      - python-dotenv
+  - pip

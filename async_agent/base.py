@@ -48,6 +48,7 @@ class AsyncAgentExecutor(AgentExecutor):
         self.lock = Lock()
         self.pool = Pool()
         self.emitter = AsyncIOEventEmitter()
+
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
@@ -86,6 +87,21 @@ class AsyncAgentExecutor(AgentExecutor):
 
         self._system_call(inputs)
 
+    def _tool_error_callback(
+        self,
+        exception: Any,
+        job_id: Optional[str] = None,
+        tool: Optional[BaseParallelizableTool] = None,
+        agent_action: Optional[AgentAction] = None,
+    ):
+        self.emitter.emit("message", f"error({tool.name}:{job_id})", exception)
+
+        inputs = self.prep_inputs(
+            {"input": f"Tool {tool.name} with job_id {job_id} failed: {exception}"}
+        )
+
+        self._system_call(inputs)
+
     def _start_parallelizable_tool(
         self,
         tool: BaseParallelizableTool,
@@ -105,6 +121,12 @@ class AsyncAgentExecutor(AgentExecutor):
                 **tool_run_kwargs,
             },
             callback=lambda _: self._tool_callback(
+                _,
+                job_id=job_id,
+                tool=tool,
+                agent_action=agent_action,
+            ),
+            error_callback=lambda _: self._tool_error_callback(
                 _,
                 job_id=job_id,
                 tool=tool,

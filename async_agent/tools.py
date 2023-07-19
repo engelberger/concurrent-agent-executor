@@ -45,3 +45,46 @@ class WaitTool(BaseParallelizableTool):
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> str:
         return self._run(run_manager=run_manager)
+
+
+class CancelTool(BaseParallelizableTool):
+    name = "_Cancel"
+    description = "This tool cancels other tools that run in the background."
+
+    def _run(
+        self,
+        job_id: str,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> str:
+        # ! TODO: Implement cancellation logic
+        # return f"Cancelling job {job_id}"
+        raise NotImplementedError
+
+    async def _arun(
+        self,
+        job_id: str,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> str:
+        return self._run(job_id=job_id, run_manager=run_manager)
+
+
+class StatusTool(BaseParallelizableTool):
+    name = "_Status"
+    description = (
+        "This tool checks the status of other tools that run in the background."
+    )
+
+    def _run(
+        self,
+        job_id: str,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> str:
+        # ! TODO: Implement status logic
+        return f"Checking status of job {job_id}"
+
+    async def _arun(
+        self,
+        job_id: str,
+        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+    ) -> str:
+        return self._run(job_id=job_id, run_manager=run_manager)
