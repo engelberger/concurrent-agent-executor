@@ -8,7 +8,7 @@ from multiprocessing import Lock, Pool
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from pyee import AsyncIOEventEmitter
 
-from langchain.agents.tools import InvalidTool
+from langchain.agents.tools import InvalidTool, BaseTool
 from langchain.agents.agent import (
     ExceptionTool,
     AgentExecutor,
@@ -37,7 +37,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
     agent: ConcurrentStructuredChatAgent
     """The agent to run for creating a plan and determining actions
     to take at each step of the execution loop."""
-    tools: Sequence[BaseParallelizableTool]
+    tools: Sequence[Union[BaseParallelizableTool, BaseTool]]
     """The valid tools the agent can call."""
 
     lock: Any  # lock: Lock
@@ -209,7 +209,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
                 if return_direct:
                     tool_run_kwargs["llm_prefix"] = ""
 
-                if tool.is_parallelizable:
+                if hasattr(tool, "is_parallelizable") and tool.is_parallelizable:
                     observation = self._start_parallelizable_tool(
                         tool,
                         agent_action,
@@ -359,7 +359,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
                 if return_direct:
                     tool_run_kwargs["llm_prefix"] = ""
 
-                if tool.is_parallelizable:
+                if hasattr(tool, "is_parallelizable") and tool.is_parallelizable:
                     observation = self._start_parallelizable_tool(
                         tool,
                         agent_action,
@@ -548,7 +548,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
                 if return_direct:
                     tool_run_kwargs["llm_prefix"] = ""
 
-                if tool.is_parallelizable:
+                if hasattr(tool, "is_parallelizable") and tool.is_parallelizable:
                     observation = await self._astart_parallelizable_tool(
                         tool,
                         agent_action,

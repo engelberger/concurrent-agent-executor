@@ -19,7 +19,7 @@ setup(
         "Development Status :: 3 - Alpha",
     ],
     install_requires=[
-        "openai"
+        "openai",
         "langchain",
         "pydantic",
         "colorama",

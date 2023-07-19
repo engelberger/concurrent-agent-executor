@@ -95,7 +95,7 @@ class ConcurrentStructuredChatAgent(Agent):
 
             _ = f"{tool.name}: {tool.description}, args: {args_schema}"
 
-            if tool.is_parallelizable:
+            if hasattr(tool, "is_parallelizable") and tool.is_parallelizable:
                 _ += ", this tool runs in the background SO YOU MUST WAIT FOR IT TO FINISH"
 
             tool_strings.append(_)
