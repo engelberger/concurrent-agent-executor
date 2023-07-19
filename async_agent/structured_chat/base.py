@@ -1,5 +1,5 @@
 import re
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 from pydantic import Field
 
@@ -15,13 +15,19 @@ from langchain.prompts.chat import (
     HumanMessagePromptTemplate,
     SystemMessagePromptTemplate,
 )
-from langchain.schema import AgentAction
-from langchain.tools import BaseTool
+from langchain.schema import AgentAction, AgentFinish
+from langchain.callbacks.manager import Callbacks
+
+from async_agent.tools import BaseParallelizableTool
 
 HUMAN_MESSAGE_TEMPLATE = "{input}\n\n{agent_scratchpad}"
 
+SYSTEM_MESSAGE_TEMPLATE = "{input}\n\n{agent_scratchpad}"
 
-class StructuredChatAgent(Agent):
+
+class AsyncStructuredChatAgent(Agent):
+    system_llm_chain: LLMChain
+
     output_parser: AgentOutputParser = Field(
         default_factory=StructuredChatOutputParserWithRetries
     )
@@ -30,8 +36,8 @@ class StructuredChatAgent(Agent):
     def system_prefix(self) -> str:
         """Prefix to append the system message with.
 
-        This is used when the agent decides to use a tool that returns a promise, 
-        as the agent will invoke it but the system will run it and respond with 
+        This is used when the agent decides to use a tool that returns a promise,
+        as the agent will invoke it but the system will run it and respond with
         the result.
         """
         return "System: "
@@ -62,7 +68,7 @@ class StructuredChatAgent(Agent):
             return agent_scratchpad
 
     @classmethod
-    def _validate_tools(cls, tools: Sequence[BaseTool]) -> None:
+    def _validate_tools(cls, tools: Sequence[BaseParallelizableTool]) -> None:
         pass
 
     @classmethod
@@ -75,10 +81,25 @@ class StructuredChatAgent(Agent):
     def _stop(self) -> List[str]:
         return ["Observation:"]
 
+    @staticmethod
+    def create_tools_description(tools: Sequence[BaseParallelizableTool]):
+        tool_strings = []
+        for tool in tools:
+            # ? NOTE: Tools must include schema for args
+            args_schema = re.sub("}", "}}}}", re.sub("{", "{{{{", str(tool.args)))
+
+            _ = f"{tool.name}: {tool.description}, args: {args_schema}"
+
+            if tool.is_parallelizable:
+                _ += ", this tool runs in the background SO YOU MUST WAIT FOR IT TO FINISH"
+
+            tool_strings.append(_)
+        return "\n".join(tool_strings)
+
     @classmethod
     def create_prompt(
         cls,
-        tools: Sequence[BaseTool],
+        tools: Sequence[BaseParallelizableTool],
         prefix: str = PREFIX,
         suffix: str = SUFFIX,
         human_message_template: str = HUMAN_MESSAGE_TEMPLATE,
@@ -86,13 +107,8 @@ class StructuredChatAgent(Agent):
         input_variables: Optional[List[str]] = None,
         memory_prompts: Optional[List[Any]] = None,
     ) -> Any:
-        tool_strings = []
-        for tool in tools:
-            args_schema = re.sub("}", "}}}}", re.sub("{", "{{{{", str(tool.args)))
-            # ? NOTE: Tools must include schema for args
-            tool_strings.append(f"{tool.name}: {tool.description}, args: {args_schema}")
-        formatted_tools = "\n".join(tool_strings)
         tool_names = ", ".join([tool.name for tool in tools])
+        formatted_tools = cls.create_tools_description(tools)
         format_instructions = format_instructions.format(tool_names=tool_names)
         template = "\n\n".join([prefix, formatted_tools, format_instructions, suffix])
         if input_variables is None:
@@ -106,15 +122,41 @@ class StructuredChatAgent(Agent):
         return ChatPromptTemplate(input_variables=input_variables, messages=messages)
 
     @classmethod
+    def create_system_prompt(
+        cls,
+        tools: Sequence[BaseParallelizableTool],
+        prefix: str = PREFIX,
+        suffix: str = SUFFIX,
+        system_message_template: str = SYSTEM_MESSAGE_TEMPLATE,
+        format_instructions: str = FORMAT_INSTRUCTIONS,
+        input_variables: Optional[List[str]] = None,
+        memory_prompts: Optional[List[Any]] = None,
+    ) -> Any:
+        formatted_tools = cls.create_tools_description(tools)
+        tool_names = ", ".join([tool.name for tool in tools])
+        format_instructions = format_instructions.format(tool_names=tool_names)
+        template = "\n\n".join([prefix, formatted_tools, format_instructions, suffix])
+        if input_variables is None:
+            input_variables = ["input", "agent_scratchpad"]
+        _memory_prompts = memory_prompts or []
+        messages = [
+            SystemMessagePromptTemplate.from_template(template),
+            *_memory_prompts,
+            SystemMessagePromptTemplate.from_template(system_message_template),
+        ]
+        return ChatPromptTemplate(input_variables=input_variables, messages=messages)
+
+    @classmethod
     def from_llm_and_tools(
         cls,
         llm: Any,
-        tools: Sequence[BaseTool],
+        tools: Sequence[BaseParallelizableTool],
         callback_manager: Optional[BaseCallbackManager] = None,
         output_parser: Optional[AgentOutputParser] = None,
         prefix: str = PREFIX,
         suffix: str = SUFFIX,
         human_message_template: str = HUMAN_MESSAGE_TEMPLATE,
+        system_message_template: str = SYSTEM_MESSAGE_TEMPLATE,
         format_instructions: str = FORMAT_INSTRUCTIONS,
         input_variables: Optional[List[str]] = None,
         memory_prompts: Optional[List[Any]] = None,
@@ -122,6 +164,7 @@ class StructuredChatAgent(Agent):
     ) -> Agent:
         """Construct an agent from an LLM and tools."""
         cls._validate_tools(tools)
+
         prompt = cls.create_prompt(
             tools,
             prefix=prefix,
@@ -131,15 +174,34 @@ class StructuredChatAgent(Agent):
             input_variables=input_variables,
             memory_prompts=memory_prompts,
         )
+
+        system_prompt = cls.create_system_prompt(
+            tools,
+            prefix=prefix,
+            suffix=suffix,
+            system_message_template=system_message_template,
+            format_instructions=format_instructions,
+            input_variables=input_variables,
+            memory_prompts=memory_prompts,
+        )
+
         llm_chain = LLMChain(
             llm=llm,
             prompt=prompt,
             callback_manager=callback_manager,
         )
+
+        system_llm_chain = LLMChain(
+            llm=llm,
+            prompt=system_prompt,
+            callback_manager=callback_manager,
+        )
+
         tool_names = [tool.name for tool in tools]
         _output_parser = output_parser or cls._get_default_output_parser(llm=llm)
         return cls(
             llm_chain=llm_chain,
+            system_llm_chain=system_llm_chain,
             allowed_tools=tool_names,
             output_parser=_output_parser,
             **kwargs,
@@ -148,3 +210,27 @@ class StructuredChatAgent(Agent):
     @property
     def _agent_type(self) -> str:
         raise ValueError
+
+    def _system_plan(
+        self,
+        intermediate_steps: List[Tuple[AgentAction, str]],
+        callbacks: Callbacks = None,
+        **kwargs: Any,
+    ) -> Union[AgentAction, AgentFinish]:
+        """Given a job result, decided what to do.
+
+        Args:
+            intermediate_steps: Steps the LLM has taken to date,
+                along with observations
+            callbacks: Callbacks to run.
+            **kwargs: User inputs.
+
+        Returns:
+            Action specifying what tool to use.
+        """
+        full_inputs = self.get_full_inputs(intermediate_steps, **kwargs)
+
+        # print("system_prompt", self.system_llm_chain.prep_prompts([full_inputs]))
+
+        full_output = self.system_llm_chain.predict(callbacks=callbacks, **full_inputs)
+        return self.output_parser.parse(full_output)

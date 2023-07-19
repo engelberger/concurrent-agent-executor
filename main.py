@@ -1,5 +1,5 @@
 """
-generate a random number between 1 and 10, if it is greater than 5 say "eureka", otherwise say "sha"
+generate a random number between 1 and 2, if it is 1 say "odd", otherwise say "even". Both a and b are integers.
 """
 
 import aioconsole
@@ -13,32 +13,40 @@ from dotenv import load_dotenv
 from langchain.prompts import MessagesPlaceholder
 from langchain.prompts import MessagesPlaceholder
 from langchain.memory import ConversationBufferMemory
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from colorama import Back, Style
 
 from async_agent import AsyncAgentExecutor, BaseParallelizableTool
 from async_agent.tools import WaitTool
-from async_agent.structured_chat import StructuredChatAgent
+from async_agent.structured_chat import AsyncStructuredChatAgent
 
 load_dotenv()
 
 
 class RandomNumberToolSchema(BaseModel):
-    a: int
-    b: int
+    a: int = Field(
+        ...,
+        description="The lower bound of the random number generation (inclusive).",
+    )
+    b: int = Field(
+        ...,
+        description="The upper bound of the random number generation (inclusive).",
+    )
 
 
 class RandomNumberTool(BaseParallelizableTool):
     is_parallelizable = True
 
     name = "RandomNumber"
-    description = "Schedules a random number generation between a and b; once invoked, you must wait for the result to be ready"
+    description = "Schedules a random number generation between a and b; once invoked, you must wait for the result to be ready. Both a and b are integers."
     args_schema: RandomNumberToolSchema = RandomNumberToolSchema
 
     def _run(self, a, b):
+        print(a, b)
         try:
-            time.sleep(5)
+            time.sleep(10)
             n = random.randint(a, b)
+            # n = 1
             return f"The random number is: {n}"
         except Exception as e:
             return f"Error: {e}"
@@ -48,10 +56,16 @@ class RandomNumberTool(BaseParallelizableTool):
 
 
 async def main():
-    def on_message(who, message):
-        print(f"\n{Back.GREEN}{who}{Style.RESET_ALL}: {message}\n")
+    def on_message(who: str, message: str):
+        if who.startswith("tool"):
+            print(f"\n{Back.YELLOW}{who}{Style.RESET_ALL}: {message}\n")
+        else:
+            print(f"\n{Back.GREEN}{who}{Style.RESET_ALL}: {message}\n")
 
-    llm = ChatOpenAI()
+    llm = ChatOpenAI(
+        temperature=0.3,
+        # model="gpt-4",
+    )
 
     tools = [
         RandomNumberTool(),
@@ -61,7 +75,7 @@ async def main():
     chat_history = MessagesPlaceholder(variable_name="chat_history")
     memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
 
-    agent = StructuredChatAgent.from_llm_and_tools(
+    agent = AsyncStructuredChatAgent.from_llm_and_tools(
         llm=llm,
         tools=tools,
         memory_prompts=[chat_history],
@@ -71,9 +85,9 @@ async def main():
     executor = AsyncAgentExecutor.from_agent_and_tools(
         agent=agent,
         tools=tools,
-        verbose=True,
-        # return_intermediate_steps=True,
         memory=memory,
+        # verbose=True,
+        # return_intermediate_steps=True,
     )
 
     with executor:
