@@ -38,3 +38,5 @@ SUFFIX = """Begin! Reminder to ALWAYS respond with a valid json blob of a single
 Thought:"""
 
 RESULT = """Result: {result}"""
+
+START_BACKGROUND_JOB = "Running {tool_name} in the background with job_id {job_id}"

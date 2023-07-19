@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from multiprocessing import Lock, Pool
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from pyee import AsyncIOEventEmitter
 
 from langchain.agents.tools import InvalidTool
@@ -26,52 +26,19 @@ from langchain.schema import (
 from langchain.utilities.asyncio import asyncio_timeout
 from human_id import generate_id
 from async_agent.structured_chat.base import AsyncStructuredChatAgent
+from async_agent.structured_chat.prompt import START_BACKGROUND_JOB
 
 from async_agent.tools import BaseParallelizableTool
 
 
 class AsyncAgentExecutor(AgentExecutor):
-    """Consists of an agent using tools."""
+    """Consists of an async agent using tools."""
 
     agent: AsyncStructuredChatAgent
     """The agent to run for creating a plan and determining actions
     to take at each step of the execution loop."""
     tools: Sequence[BaseParallelizableTool]
     """The valid tools the agent can call."""
-    return_intermediate_steps: bool = False
-    """Whether to return the agent's trajectory of intermediate steps
-    at the end in addition to the final output."""
-    max_iterations: Optional[int] = 15
-    """The maximum number of steps to take before ending the execution
-    loop.
-    
-    Setting to 'None' could lead to an infinite loop."""
-    max_execution_time: Optional[float] = None
-    """The maximum amount of wall clock time to spend in the execution
-    loop.
-    """
-    early_stopping_method: str = "force"
-    """The method to use for early stopping if the agent never
-    returns `AgentFinish`. Either 'force' or 'generate'.
-
-    `"force"` returns a string saying that it stopped because it met a
-        time or iteration limit.
-    
-    `"generate"` calls the agent's LLM Chain one final time to generate
-        a final answer based on the previous steps.
-    """
-    handle_parsing_errors: Union[
-        bool, str, Callable[[OutputParserException], str]
-    ] = False
-    """How to handle errors raised by the agent's output parser.
-    Defaults to `False`, which raises the error.
-s
-    If `true`, the error will be sent back to the LLM as an observation.
-    If a string, the string itself will be sent to the LLM as an observation.
-    If a callable function, the function will be called with the exception
-     as an argument, and the result of that function will be passed to the agent
-      as an observation.
-    """
 
     lock: Any  # lock: Lock
     pool: Any  # pool: Pool
@@ -86,17 +53,6 @@ s
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         self.pool.close()
         self.pool.join()
-
-    def _should_continue(self, iterations: int, time_elapsed: float) -> bool:
-        if self.max_iterations is not None and iterations >= self.max_iterations:
-            return False
-        if (
-            self.max_execution_time is not None
-            and time_elapsed >= self.max_execution_time
-        ):
-            return False
-
-        return True
 
     def _return(
         self,
@@ -138,6 +94,7 @@ s
         run_manager: Optional[CallbackManagerForChainRun] = None,
         **tool_run_kwargs,
     ) -> Any:
+        # ! TODO: This does not provide a way of having tracing with callbacks
         job_id = generate_id()
 
         self.pool.apply_async(
@@ -155,8 +112,7 @@ s
             ),
         )
 
-        # ! TODO: Better prompting
-        return f"Running {tool.name} in the background with job_id {job_id}"
+        return START_BACKGROUND_JOB.format(tool_name=tool.name, job_id=job_id)
 
     def _take_next_step(
         self,

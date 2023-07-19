@@ -42,11 +42,9 @@ class RandomNumberTool(BaseParallelizableTool):
     args_schema: RandomNumberToolSchema = RandomNumberToolSchema
 
     def _run(self, a, b):
-        print(a, b)
         try:
             time.sleep(10)
             n = random.randint(a, b)
-            # n = 1
             return f"The random number is: {n}"
         except Exception as e:
             return f"Error: {e}"
@@ -64,7 +62,7 @@ async def main():
 
     llm = ChatOpenAI(
         temperature=0.3,
-        # model="gpt-4",
+        model="gpt-4",
     )
 
     tools = [
@@ -86,6 +84,8 @@ async def main():
         agent=agent,
         tools=tools,
         memory=memory,
+        handle_parsing_errors=True,
+        early_stopping_method="generate",
         # verbose=True,
         # return_intermediate_steps=True,
     )
