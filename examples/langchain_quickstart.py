@@ -40,7 +40,11 @@ def main():
     # Finally, let's initialize an agent with the tools, the language model, and the type
     # of agent we want to use.
     chat_history = MessagesPlaceholder(variable_name="chat_history")
-    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+    memory = ConversationBufferMemory(
+        memory_key="chat_history",
+        return_messages=True,
+        output_key="output",
+    )
 
     agent = ConcurrentStructuredChatAgent.from_llm_and_tools(
         llm=llm,
@@ -55,17 +59,20 @@ def main():
         memory=memory,
         handle_parsing_errors=True,
         early_stopping_method="generate",
+        return_intermediate_steps=True,
     )
 
     with executor:
         executor.emitter.on("message", on_message)
 
         # Let's test it out!
-        executor.run(
-            (
-                "What was the high temperature in SF yesterday in Fahrenheit? "
-                "What is that number raised to the .023 power?"
-            )
+        executor(
+            {
+                "input": (
+                    "What was the high temperature in SF yesterday in Fahrenheit? "
+                    "What is that number raised to the .023 power?"
+                )
+            }
         )
 
 

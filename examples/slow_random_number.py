@@ -93,7 +93,9 @@ def main():
     ]
 
     chat_history = MessagesPlaceholder(variable_name="chat_history")
-    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+    memory = ConversationBufferMemory(
+        memory_key="chat_history", output_key="output", return_messages=True
+    )
 
     agent = ConcurrentStructuredChatAgent.from_llm_and_tools(
         llm=llm,
@@ -108,6 +110,7 @@ def main():
         memory=memory,
         handle_parsing_errors=True,
         early_stopping_method="generate",
+        return_intermediate_steps=True,
     )
 
     prompt = (
@@ -117,7 +120,8 @@ def main():
 
     with executor:
         executor.emitter.on("message", on_message)
-        executor({"input": prompt})
+        result = executor({"input": prompt})
+        print(f"{result=}")
 
 
 if __name__ == "__main__":
