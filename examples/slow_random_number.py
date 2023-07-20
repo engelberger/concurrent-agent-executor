@@ -1,15 +1,21 @@
 """
-This example defines an intentionally-slow parallelizable tool that generates a random number between a and b. Showcases how the agent gets triggered twice, once for scheduling the job and once for processing the result.
+This example defines an intentionally-slow parallelizable tool that generates a random 
+number between a and b. Showcases how the agent gets triggered twice, once for scheduling 
+the job and once for processing the result.
 """
 
 import random
 import time
 
 from typing import Any
-from langchain.chat_models import ChatOpenAI
+
+
 from dotenv import load_dotenv
+from langchain.chat_models import ChatOpenAI
 from langchain.prompts import MessagesPlaceholder
 from langchain.memory import ConversationBufferMemory
+
+# pylint: disable=no-name-in-module
 from pydantic import BaseModel, Field
 from colorama import Back, Style
 
@@ -21,6 +27,8 @@ load_dotenv()
 
 
 class RandomNumberToolSchema(BaseModel):
+    """Schema for the RandomNumberTool tool."""
+
     a: int = Field(
         ...,
         description="The lower bound of the random number generation (inclusive).",
@@ -32,12 +40,21 @@ class RandomNumberToolSchema(BaseModel):
 
 
 class RandomNumberTool(BaseParallelizableTool):
+    """
+    Schedules a random number generation between a and b; once invoked, you must wait
+    for the result to be ready. Both a and b are integers.
+    """
+
     is_parallelizable = True
 
     name = "RandomNumber"
-    description = "Schedules a random number generation between a and b; once invoked, you must wait for the result to be ready. Both a and b are integers."
+    description = (
+        "Schedules a random number generation between a and b; once invoked, you"
+        "must wait for the result to be ready. Both a and b are integers."
+    )
     args_schema: RandomNumberToolSchema = RandomNumberToolSchema
 
+    # pylint: disable=arguments-differ
     def _run(
         self,
         a: int,
@@ -45,16 +62,18 @@ class RandomNumberTool(BaseParallelizableTool):
     ):
         try:
             time.sleep(10)
-            n = random.randint(a, b)
-            return f"The random number is: {n}"
-        except Exception as e:
-            return f"Error: {e}"
+            return f"The random number is: {random.randint(a, b)}"
+        # pylint: disable=broad-except
+        except Exception as exception:
+            return f"Error: {exception}"
 
-    def _arun(self, *args: Any, **kwargs: Any):
+    async def _arun(self, *args: Any, **kwargs: Any):
         return self._run(*args, **kwargs)
 
 
 def main():
+    """Main function for the example."""
+
     def on_message(who: str, message: str):
         if who.startswith("tool"):
             print(f"\n{Back.YELLOW}{who}{Style.RESET_ALL}: {message}\n")
@@ -91,7 +110,10 @@ def main():
         early_stopping_method="generate",
     )
 
-    prompt = 'generate a random number between 1 and 2, if it is 1 say "odd", otherwise say "even". Both a and b are integers.'
+    prompt = (
+        'generate a random number between 1 and 2, if it is 1 say "odd", otherwise say "even". '
+        "Both a and b are integers."
+    )
 
     with executor:
         executor.emitter.on("message", on_message)

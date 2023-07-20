@@ -1,9 +1,14 @@
+"""
+An concurrent runtime for tool-enhanced language agents.
+"""
+
 import os
 from setuptools import setup, find_packages
 
 
 def read(fname):
-    return open(os.path.join(os.path.dirname(__file__), fname)).read()
+    """Helper function to read local files."""
+    return open(os.path.join(os.path.dirname(__file__), fname), encoding="utf-8").read()
 
 
 setup(

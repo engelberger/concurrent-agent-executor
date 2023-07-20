@@ -1,7 +1,11 @@
+"""Prompt strings for the structured chat agent."""
+
 # flake8: noqa
 
+# pylint: disable=line-too-long
 PREFIX = """Respond to the human as helpfully and accurately as possible. You have access to the following tools:"""
 
+# pylint: disable=line-too-long
 FORMAT_INSTRUCTIONS = """Use a json blob to specify a tool by providing an action key (tool name) and an action_input key (tool input).
 
 Valid "action" values: "Final Answer" or {tool_names}
@@ -34,6 +38,7 @@ Action:
 }}}}
 ```"""
 
+# pylint: disable=line-too-long
 SUFFIX = """Begin! Reminder to ALWAYS respond with a valid json blob of a single action. Reminder to use the _Wait tool to WAIT FOR OTHER TOOLS THAT RUN IN THE BACKGROUND. Sometimes you will schedule TOOLS/JOBS TO RUN IN THE BACKGROUND, AND THE SYSTEM WILL TELL YOU WHEN THEY ARE DONE RUNNING. Use tools if necessary. Respond directly if appropriate. Format is Action:```$JSON_BLOB```then Observation:.
 Thought:"""
 

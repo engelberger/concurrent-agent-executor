@@ -1,4 +1,4 @@
-"""Chain that takes in an input and produces an action and action input."""
+"""Agent executor that runs tools in parallel."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         output: Any,
         job_id: Optional[str] = None,
         tool: Optional[BaseParallelizableTool] = None,
-        agent_action: Optional[AgentAction] = None,
+        # agent_action: Optional[AgentAction] = None,
     ) -> None:
         self.emitter.emit("message", f"tool({tool.name}:{job_id})", output)
 
@@ -92,7 +92,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         exception: Any,
         job_id: Optional[str] = None,
         tool: Optional[BaseParallelizableTool] = None,
-        agent_action: Optional[AgentAction] = None,
+        # agent_action: Optional[AgentAction] = None,
     ):
         self.emitter.emit("message", f"error({tool.name}:{job_id})", exception)
 
@@ -106,8 +106,8 @@ class ConcurrentAgentExecutor(AgentExecutor):
         self,
         tool: BaseParallelizableTool,
         agent_action: AgentAction,
-        color: Optional[str] = None,
-        run_manager: Optional[CallbackManagerForChainRun] = None,
+        # color: Optional[str] = None,
+        # run_manager: Optional[CallbackManagerForChainRun] = None,
         **tool_run_kwargs,
     ) -> Any:
         # ! TODO: This does not provide a way of having tracing with callbacks
@@ -124,13 +124,13 @@ class ConcurrentAgentExecutor(AgentExecutor):
                 _,
                 job_id=job_id,
                 tool=tool,
-                agent_action=agent_action,
+                # agent_action=agent_action,
             ),
             error_callback=lambda _: self._tool_error_callback(
                 _,
                 job_id=job_id,
                 tool=tool,
-                agent_action=agent_action,
+                # agent_action=agent_action,
             ),
         )
 
@@ -155,25 +155,27 @@ class ConcurrentAgentExecutor(AgentExecutor):
                 callbacks=run_manager.get_child() if run_manager else None,
                 **inputs,
             )
-        except OutputParserException as e:
+        except OutputParserException as exception:
             if isinstance(self.handle_parsing_errors, bool):
                 raise_error = not self.handle_parsing_errors
             else:
                 raise_error = False
             if raise_error:
-                raise e
-            text = str(e)
+                raise exception
+            text = str(exception)
             if isinstance(self.handle_parsing_errors, bool):
-                if e.send_to_llm:
-                    observation = str(e.observation)
-                    text = str(e.llm_output)
+                if exception.send_to_llm:
+                    observation = str(exception.observation)
+                    text = str(exception.llm_output)
                 else:
                     observation = "Invalid or incomplete response"
             elif isinstance(self.handle_parsing_errors, str):
                 observation = self.handle_parsing_errors
             elif callable(self.handle_parsing_errors):
-                observation = self.handle_parsing_errors(e)
+                # pylint: disable=not-callable
+                observation = self.handle_parsing_errors(exception)
             else:
+                # pylint: disable=raise-missing-from
                 raise ValueError("Got unexpected type of `handle_parsing_errors`")
             output = AgentAction("_Exception", observation, text)
             if run_manager:
@@ -300,30 +302,33 @@ class ConcurrentAgentExecutor(AgentExecutor):
         Override this to take control of how the agent makes and acts on choices.
         """
         try:
+            # pylint: disable=protected-access
             output = self.agent._system_plan(
                 intermediate_steps,
                 callbacks=run_manager.get_child() if run_manager else None,
                 **inputs,
             )
-        except OutputParserException as e:
+        except OutputParserException as exception:
             if isinstance(self.handle_parsing_errors, bool):
                 raise_error = not self.handle_parsing_errors
             else:
                 raise_error = False
             if raise_error:
-                raise e
-            text = str(e)
+                raise exception
+            text = str(exception)
             if isinstance(self.handle_parsing_errors, bool):
-                if e.send_to_llm:
-                    observation = str(e.observation)
-                    text = str(e.llm_output)
+                if exception.send_to_llm:
+                    observation = str(exception.observation)
+                    text = str(exception.llm_output)
                 else:
                     observation = "Invalid or incomplete response"
             elif isinstance(self.handle_parsing_errors, str):
                 observation = self.handle_parsing_errors
             elif callable(self.handle_parsing_errors):
-                observation = self.handle_parsing_errors(e)
+                # pylint: disable=not-callable
+                observation = self.handle_parsing_errors(exception)
             else:
+                # pylint: disable=raise-missing-from
                 raise ValueError("Got unexpected type of `handle_parsing_errors`")
             output = AgentAction("_Exception", observation, text)
             if run_manager:
@@ -492,25 +497,27 @@ class ConcurrentAgentExecutor(AgentExecutor):
                 callbacks=run_manager.get_child() if run_manager else None,
                 **inputs,
             )
-        except OutputParserException as e:
+        except OutputParserException as exception:
             if isinstance(self.handle_parsing_errors, bool):
                 raise_error = not self.handle_parsing_errors
             else:
                 raise_error = False
             if raise_error:
-                raise e
-            text = str(e)
+                raise exception
+            text = str(exception)
             if isinstance(self.handle_parsing_errors, bool):
-                if e.send_to_llm:
-                    observation = str(e.observation)
-                    text = str(e.llm_output)
+                if exception.send_to_llm:
+                    observation = str(exception.observation)
+                    text = str(exception.llm_output)
                 else:
                     observation = "Invalid or incomplete response"
             elif isinstance(self.handle_parsing_errors, str):
                 observation = self.handle_parsing_errors
             elif callable(self.handle_parsing_errors):
-                observation = self.handle_parsing_errors(e)
+                # pylint: disable=not-callable
+                observation = self.handle_parsing_errors(exception)
             else:
+                # pylint: disable=raise-missing-from
                 raise ValueError("Got unexpected type of `handle_parsing_errors`")
             output = AgentAction("_Exception", observation, text)
             tool_run_kwargs = self.agent.tool_run_logging_kwargs()

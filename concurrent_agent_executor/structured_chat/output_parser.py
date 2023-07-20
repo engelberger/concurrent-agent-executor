@@ -1,3 +1,5 @@
+"""Output parser for structured chat agents."""
+
 from __future__ import annotations
 
 import json
@@ -16,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 class StructuredChatOutputParser(AgentOutputParser):
+    """Output parser for structured chat agents."""
+
     def get_format_instructions(self) -> str:
         return FORMAT_INSTRUCTIONS
 
@@ -36,8 +40,10 @@ class StructuredChatOutputParser(AgentOutputParser):
                     )
             else:
                 return AgentFinish({"output": text}, text)
-        except Exception as e:
-            raise OutputParserException(f"Could not parse LLM output: {text}") from e
+        except Exception as exception:
+            raise OutputParserException(
+                f"Could not parse LLM output: {text}"
+            ) from exception
 
     @property
     def _type(self) -> str:
@@ -45,6 +51,8 @@ class StructuredChatOutputParser(AgentOutputParser):
 
 
 class StructuredChatOutputParserWithRetries(AgentOutputParser):
+    """Output parser for structured chat agents."""
+
     base_parser: AgentOutputParser = Field(default_factory=StructuredChatOutputParser)
     output_fixing_parser: Optional[OutputFixingParser] = None
 
@@ -60,8 +68,10 @@ class StructuredChatOutputParserWithRetries(AgentOutputParser):
             else:
                 parsed_obj = self.base_parser.parse(text)
             return parsed_obj
-        except Exception as e:
-            raise OutputParserException(f"Could not parse LLM output: {text}") from e
+        except Exception as exception:
+            raise OutputParserException(
+                f"Could not parse LLM output: {text}"
+            ) from exception
 
     @classmethod
     def from_llm(
@@ -69,6 +79,8 @@ class StructuredChatOutputParserWithRetries(AgentOutputParser):
         llm: Optional[Any] = None,
         base_parser: Optional[StructuredChatOutputParser] = None,
     ) -> StructuredChatOutputParserWithRetries:
+        """Create a new StructuredChatOutputParserWithRetries from an LLM."""
+
         if llm is not None:
             base_parser = base_parser or StructuredChatOutputParser()
             output_fixing_parser = OutputFixingParser.from_llm(

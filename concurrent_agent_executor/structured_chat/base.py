@@ -1,3 +1,5 @@
+"""Base class for structured chat agents."""
+
 import re
 from typing import Any, List, Optional, Sequence, Tuple, Union
 
@@ -31,6 +33,8 @@ SYSTEM_MESSAGE_TEMPLATE = "{input}\n\n{agent_scratchpad}"
 
 
 class ConcurrentStructuredChatAgent(Agent):
+    """Base class for structured chat agents."""
+
     system_llm_chain: LLMChain
 
     output_parser: AgentOutputParser = Field(
@@ -88,6 +92,8 @@ class ConcurrentStructuredChatAgent(Agent):
 
     @staticmethod
     def create_tools_description(tools: Sequence[BaseParallelizableTool]):
+        """Create a description of the tools."""
+
         tool_strings = []
         for tool in tools:
             # ? NOTE: Tools must include schema for args
@@ -137,6 +143,8 @@ class ConcurrentStructuredChatAgent(Agent):
         input_variables: Optional[List[str]] = None,
         memory_prompts: Optional[List[Any]] = None,
     ) -> Any:
+        """Create a prompt for the system to use."""
+
         formatted_tools = cls.create_tools_description(tools)
         tool_names = ", ".join([tool.name for tool in tools])
         format_instructions = format_instructions.format(tool_names=tool_names)
