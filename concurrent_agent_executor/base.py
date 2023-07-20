@@ -215,8 +215,8 @@ class ConcurrentAgentExecutor(AgentExecutor):
                     observation = self._start_parallelizable_tool(
                         tool,
                         agent_action,
-                        color,
-                        run_manager,
+                        # color,
+                        # run_manager,
                         **tool_run_kwargs,
                     )
                 else:
@@ -368,8 +368,8 @@ class ConcurrentAgentExecutor(AgentExecutor):
                     observation = self._start_parallelizable_tool(
                         tool,
                         agent_action,
-                        color,
-                        run_manager,
+                        # color,
+                        # run_manager,
                         **tool_run_kwargs,
                     )
                 else:
@@ -466,15 +466,15 @@ class ConcurrentAgentExecutor(AgentExecutor):
         self,
         tool: BaseParallelizableTool,
         agent_action: AgentAction,
-        color: Optional[str] = None,
-        run_manager: Optional[AsyncCallbackManagerForChainRun] = None,
+        # color: Optional[str] = None,
+        # run_manager: Optional[AsyncCallbackManagerForChainRun] = None,
         **tool_run_kwargs,
     ) -> Any:
         return self._start_parallelizable_tool(
             tool=tool,
             agent_action=agent_action,
-            color=color,
-            run_manager=run_manager,
+            # color=color,
+            # run_manager=run_manager,
             **tool_run_kwargs,
         )
 
@@ -559,8 +559,8 @@ class ConcurrentAgentExecutor(AgentExecutor):
                     observation = await self._astart_parallelizable_tool(
                         tool,
                         agent_action,
-                        color,
-                        run_manager,
+                        # color,
+                        # run_manager,
                         **tool_run_kwargs,
                     )
                 else:
