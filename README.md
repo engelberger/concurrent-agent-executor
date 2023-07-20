@@ -35,3 +35,13 @@ conda env create -f environment.yml
 ### [Branch prediction](https://en.wikipedia.org/wiki/Branch_predictor) and hypothesizing
 
 ![Diagram showing branch prediction capabilities of the agent](assets/hypothesizing.png)
+
+### Concurrency overhead and theoretical performance
+
+![Diagram showing theoretical performance of the agent,](assets/theoretical_performance.png)
+
+In this diagram, the `x-axis` represents the processsing steps needed to accomplish a task, and the `y-axis` represents the running time of the agent.
+
+The green line shows the theorical running time with respect to the processing steps for the classic langchain agent (sequentially).
+
+In contrast, the blue line represents the theoretical running time for the proposed concurrent agent runtime (proposed methods).
