@@ -6,7 +6,7 @@ import asyncio
 import time
 from multiprocessing import Lock, Pool
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
-from pyee import AsyncIOEventEmitter
+from pyee import AsyncIOEventEmitter, EventEmitter
 
 from langchain.agents.tools import InvalidTool, BaseTool
 from langchain.agents.agent import (
@@ -44,6 +44,17 @@ class ConcurrentAgentExecutor(AgentExecutor):
     pool: Any  # pool: Pool
     emitter: Any  # emitter: AsyncIOEventEmitter
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        self.lock = None
+        self.pool = None
+
+        # self.emitter = AsyncIOEventEmitter(
+        self.emitter = EventEmitter(
+            # asyncio.new_event_loop()
+        )
+
     def __enter__(self) -> ConcurrentAgentExecutor:
         self.start()
         return self
@@ -54,9 +65,6 @@ class ConcurrentAgentExecutor(AgentExecutor):
     def start(self) -> None:
         self.lock = Lock()
         self.pool = Pool()
-        self.emitter = AsyncIOEventEmitter(
-            # asyncio.new_event_loop()
-        )
 
     def stop(self) -> None:
         self.pool.close()

@@ -4,7 +4,7 @@ channels:
   - conda-forge
 dependencies:
   - pip:
-      - streamlit
+      - chainlit==0.6.0
       - textual
       - aioconsole
 
