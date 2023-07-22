@@ -89,7 +89,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         if self.return_intermediate_steps:
             final_output["intermediate_steps"] = intermediate_steps
 
-        self.emitter.emit("message", "agent", final_output["output"])
+        self.emitter.emit("message", "agent", "message", final_output["output"])
 
         return final_output
 
@@ -100,8 +100,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         tool: Optional[BaseParallelizableTool] = None,
         # agent_action: Optional[AgentAction] = None,
     ) -> None:
-        # self.emitter.emit("message", f"tool({tool.name}:{job_id})", output)
-        self.emitter.emit("message", tool.name, output)
+        self.emitter.emit("message", f"{tool.name}:{job_id}", "finish", output)
 
         inputs = self.prep_inputs(
             {"input": f"Tool {tool.name} with job_id {job_id} finished: {output}"}
@@ -116,8 +115,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         tool: Optional[BaseParallelizableTool] = None,
         # agent_action: Optional[AgentAction] = None,
     ):
-        # self.emitter.emit("message", f"error({tool.name}:{job_id})", exception)
-        self.emitter.emit("message", tool.name, exception)
+        self.emitter.emit("message", f"{tool.name}:{job_id}", "error", exception)
 
         inputs = self.prep_inputs(
             {"input": f"Tool {tool.name} with job_id {job_id} failed: {exception}"}
@@ -157,8 +155,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
             ),
         )
 
-        # self.emitter.emit("message", f"tool({tool.name}:{job_id})", "started")
-        self.emitter.emit("message", tool.name, "started")
+        self.emitter.emit("message", f"{tool.name}:{job_id}", "start", "started")
 
         return START_BACKGROUND_JOB.format(tool_name=tool.name, job_id=job_id)
 
@@ -484,7 +481,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         if self.return_intermediate_steps:
             final_output["intermediate_steps"] = intermediate_steps
 
-        self.emitter.emit("message", "agent", final_output["output"])
+        self.emitter.emit("message", "agent", "message", final_output["output"])
 
         return final_output
 
