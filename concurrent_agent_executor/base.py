@@ -40,6 +40,8 @@ class ConcurrentAgentExecutor(AgentExecutor):
     tools: Sequence[Union[BaseParallelizableTool, BaseTool]]
     """The valid tools the agent can call."""
 
+    processes: Optional[int]
+
     lock: Any  # lock: Lock
     pool: Any  # pool: Pool
     emitter: Any  # emitter: AsyncIOEventEmitter
@@ -64,7 +66,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
 
     def start(self) -> None:
         self.lock = Lock()
-        self.pool = Pool()
+        self.pool = Pool(processes=self.processes)
 
     def stop(self) -> None:
         self.pool.close()
