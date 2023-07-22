@@ -24,6 +24,10 @@ Then, run:
 python examples/slow_random_number.py
 ```
 
+Alternatively, you can run the chainlit interface
+
+![Chat-like UI example](assets/example.png)
+
 ## Contributing
 
 ```console
