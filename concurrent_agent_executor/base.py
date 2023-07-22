@@ -155,6 +155,8 @@ class ConcurrentAgentExecutor(AgentExecutor):
             ),
         )
 
+        self.emitter.emit("message", f"tool({tool.name}:{job_id})", "started")
+
         return START_BACKGROUND_JOB.format(tool_name=tool.name, job_id=job_id)
 
     def _take_next_step(
