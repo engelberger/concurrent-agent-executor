@@ -224,13 +224,14 @@ class ConcurrentStructuredChatAgent(Agent):
     def _agent_type(self) -> str:
         raise ValueError
 
-    def _system_plan(
+    def plan(
         self,
         intermediate_steps: List[Tuple[AgentAction, str]],
         callbacks: Callbacks = None,
+        who: str = "agent",
         **kwargs: Any,
     ) -> Union[AgentAction, AgentFinish]:
-        """Given a job result, decided what to do.
+        """Given input, decided what to do.
 
         Args:
             intermediate_steps: Steps the LLM has taken to date,
@@ -242,8 +243,10 @@ class ConcurrentStructuredChatAgent(Agent):
             Action specifying what tool to use.
         """
         full_inputs = self.get_full_inputs(intermediate_steps, **kwargs)
-
-        # print("system_prompt", self.system_llm_chain.prep_prompts([full_inputs]))
-
-        full_output = self.system_llm_chain.predict(callbacks=callbacks, **full_inputs)
+        if who == "agent":
+            full_output = self.llm_chain.predict(callbacks=callbacks, **full_inputs)
+        else:
+            full_output = self.system_llm_chain.predict(
+                callbacks=callbacks, **full_inputs
+            )
         return self.output_parser.parse(full_output)
