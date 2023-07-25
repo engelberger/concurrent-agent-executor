@@ -2,7 +2,7 @@ import asyncio
 
 import chainlit
 
-from chainlit.session import sessions_id
+from chainlit.session import sessions
 from chainlit.emitter import ChainlitEmitter
 from chainlit.context import loop_var, emitter_var
 
@@ -17,7 +17,7 @@ task_list: chainlit.TaskList = None
 
 def _context_hack():
     loop_var.set(_LOOP)
-    session = list(sessions_id.values())[0]
+    session = list(sessions.values())[0]
     emitter = ChainlitEmitter(session)
     emitter_var.set(emitter)
 

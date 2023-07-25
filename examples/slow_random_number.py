@@ -59,7 +59,11 @@ class RandomNumberTool(BaseParallelizableTool):
         self,
         a: int,
         b: int,
+        *,
+        job_id: str,
     ):
+        print(f"Running job {job_id}...")
+
         try:
             time.sleep(10)
             return f"The random number is: {random.randint(a, b)}"
