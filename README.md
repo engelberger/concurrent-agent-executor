@@ -49,3 +49,7 @@ In this diagram, the `x-axis` represents the processsing steps needed to accompl
 The green line shows the theorical running time with respect to the processing steps for the classic langchain agent (sequentially).
 
 In contrast, the blue line represents the theoretical running time for the proposed concurrent agent runtime (proposed methods).
+
+### Executor's process architecture
+
+![Diagram showing the different threads and process pools](assets/executor_architecture.png)
