@@ -31,7 +31,6 @@ from langchain.schema import (
 )
 from langchain.memory import ConversationBufferMemory
 from langchain.load.dump import dumpd
-from human_id import generate_id
 
 from concurrent_agent_executor.structured_chat.base import ConcurrentStructuredChatAgent
 from concurrent_agent_executor.structured_chat.prompt import START_BACKGROUND_JOB
