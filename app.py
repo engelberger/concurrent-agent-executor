@@ -1,4 +1,5 @@
 import asyncio
+from typing import Optional
 
 import chainlit
 
@@ -10,9 +11,9 @@ from concurrent_agent_executor import initialize
 from examples.slow_random_number import RandomNumberTool
 
 _LOOP = asyncio.get_event_loop()
-executor = initialize(tools=[RandomNumberTool()])
+executor = initialize(tools=[RandomNumberTool()], processes=4)
 
-task_list: chainlit.TaskList = None
+task_list: Optional[chainlit.TaskList] = None
 
 
 def _context_hack():
@@ -79,7 +80,7 @@ async def on_chat_start():
 
 @chainlit.on_message
 async def on_message(message: str):
-    await executor.acall({"input": message})
+    executor({"input": message})
 
 
 @chainlit.on_stop

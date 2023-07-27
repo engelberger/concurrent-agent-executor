@@ -1,6 +1,7 @@
 langchain-0.0.231
 chainlit-0.6.0
-.chainlit
+# .chainlit
+.langchain.db
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

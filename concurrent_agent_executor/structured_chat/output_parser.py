@@ -12,7 +12,9 @@ from pydantic import Field
 from langchain.agents.agent import AgentOutputParser
 from langchain.agents.structured_chat.prompt import FORMAT_INSTRUCTIONS
 from langchain.output_parsers import OutputFixingParser
-from langchain.schema import AgentAction, AgentFinish, OutputParserException
+from langchain.schema import AgentFinish, OutputParserException
+
+from concurrent_agent_executor.models import AgentActionWithId
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +25,7 @@ class StructuredChatOutputParser(AgentOutputParser):
     def get_format_instructions(self) -> str:
         return FORMAT_INSTRUCTIONS
 
-    def parse(self, text: str) -> Union[AgentAction, AgentFinish]:
+    def parse(self, text: str) -> Union[AgentActionWithId, AgentFinish]:
         try:
             action_match = re.search(r"```(.*?)```?", text, re.DOTALL)
             if action_match is not None:
@@ -35,7 +37,7 @@ class StructuredChatOutputParser(AgentOutputParser):
                 if response["action"] == "Final Answer":
                     return AgentFinish({"output": response["action_input"]}, text)
                 else:
-                    return AgentAction(
+                    return AgentActionWithId(
                         response["action"], response.get("action_input", {}), text
                     )
             else:
@@ -59,11 +61,11 @@ class StructuredChatOutputParserWithRetries(AgentOutputParser):
     def get_format_instructions(self) -> str:
         return FORMAT_INSTRUCTIONS
 
-    def parse(self, text: str) -> Union[AgentAction, AgentFinish]:
+    def parse(self, text: str) -> Union[AgentActionWithId, AgentFinish]:
         try:
             if self.output_fixing_parser is not None:
                 parsed_obj: Union[
-                    AgentAction, AgentFinish
+                    AgentActionWithId, AgentFinish
                 ] = self.output_fixing_parser.parse(text)
             else:
                 parsed_obj = self.base_parser.parse(text)

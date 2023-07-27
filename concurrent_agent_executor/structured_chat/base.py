@@ -16,8 +16,9 @@ from langchain.prompts.chat import (
 )
 from langchain.schema import AgentAction, AgentFinish
 from langchain.callbacks.manager import Callbacks
+from concurrent_agent_executor.models import InteractionType
 
-from concurrent_agent_executor.tools import BaseParallelizableTool
+from concurrent_agent_executor.models import BaseParallelizableTool
 from concurrent_agent_executor.structured_chat.output_parser import (
     StructuredChatOutputParserWithRetries,
 )
@@ -224,13 +225,14 @@ class ConcurrentStructuredChatAgent(Agent):
     def _agent_type(self) -> str:
         raise ValueError
 
-    def _system_plan(
+    def plan(
         self,
         intermediate_steps: List[Tuple[AgentAction, str]],
         callbacks: Callbacks = None,
+        interaction_type: InteractionType = InteractionType.User,
         **kwargs: Any,
     ) -> Union[AgentAction, AgentFinish]:
-        """Given a job result, decided what to do.
+        """Given input, decided what to do.
 
         Args:
             intermediate_steps: Steps the LLM has taken to date,
@@ -243,7 +245,16 @@ class ConcurrentStructuredChatAgent(Agent):
         """
         full_inputs = self.get_full_inputs(intermediate_steps, **kwargs)
 
-        # print("system_prompt", self.system_llm_chain.prep_prompts([full_inputs]))
+        match interaction_type:
+            case InteractionType.User:
+                full_output = self.llm_chain.predict(callbacks=callbacks, **full_inputs)
+            case InteractionType.Tool:
+                full_output = self.system_llm_chain.predict(
+                    callbacks=callbacks, **full_inputs
+                )
+            case InteractionType.Agent:
+                raise NotImplementedError
+            case _:
+                raise ValueError(f"Unknown interaction type: {interaction_type}")
 
-        full_output = self.system_llm_chain.predict(callbacks=callbacks, **full_inputs)
         return self.output_parser.parse(full_output)

@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import inspect
 import asyncio
 import time
-from multiprocessing import Lock, Pool
+
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
-from pyee import AsyncIOEventEmitter, EventEmitter
+from threading import Thread, Event
+from multiprocessing import Pool
+from queue import PriorityQueue
+
+from pyee import AsyncIOEventEmitter
+from pydantic import Field
 
 from langchain.agents.tools import InvalidTool, BaseTool
 from langchain.agents.agent import (
@@ -14,73 +20,200 @@ from langchain.agents.agent import (
     AgentExecutor,
 )
 from langchain.callbacks.manager import (
-    AsyncCallbackManagerForChainRun,
+    CallbackManager,
     CallbackManagerForChainRun,
+    Callbacks,
 )
 from langchain.input import get_color_mapping
 from langchain.schema import (
-    AgentAction,
     AgentFinish,
     OutputParserException,
 )
-from langchain.utilities.asyncio import asyncio_timeout
-from human_id import generate_id
+from langchain.memory import ConversationBufferMemory
+from langchain.load.dump import dumpd
 
 from concurrent_agent_executor.structured_chat.base import ConcurrentStructuredChatAgent
 from concurrent_agent_executor.structured_chat.prompt import START_BACKGROUND_JOB
-from concurrent_agent_executor.tools import BaseParallelizableTool
+from concurrent_agent_executor.models import (
+    Interaction,
+    InteractionType,
+    AgentActionWithId,
+    BaseParallelizableTool,
+)
 
 
 class ConcurrentAgentExecutor(AgentExecutor):
-    """Consists of an async agent using tools."""
-
     agent: ConcurrentStructuredChatAgent
-    """The agent to run for creating a plan and determining actions
-    to take at each step of the execution loop."""
     tools: Sequence[Union[BaseParallelizableTool, BaseTool]]
-    """The valid tools the agent can call."""
+    memory: Optional[ConversationBufferMemory] = None
 
-    processes: Optional[int]
+    processes: int = Field(
+        default=4,
+    )
+    emitter: AsyncIOEventEmitter = Field(
+        default_factory=lambda: AsyncIOEventEmitter(loop=asyncio.new_event_loop()),
+    )
+    queue: PriorityQueue[Interaction] = Field(
+        default_factory=PriorityQueue,
+    )
+    finished: Event = Field(
+        default_factory=Event,
+    )
 
-    lock: Any  # lock: Lock
-    pool: Any  # pool: Pool
-    emitter: Any  # emitter: AsyncIOEventEmitter
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-
-        self.lock = None
-        self.pool = None
-
-        self.emitter = AsyncIOEventEmitter(
-            # self.emitter = EventEmitter(
-            # asyncio.new_event_loop()
-        )
+    thread: Optional[Thread]
+    pool: Optional[Any]
 
     def __enter__(self) -> ConcurrentAgentExecutor:
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
+    def __exit__(self, exc_type, exc_value, traceback):
         self.stop()
 
-    def start(self) -> None:
-        self.lock = Lock()
-        self.pool = Pool(processes=self.processes)
+    def __call__(
+        self,
+        inputs: Union[Dict[str, Any], Any],
+        callbacks: Callbacks = None,
+        *,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        inputs = self.prep_inputs(inputs)
+        callback_manager = CallbackManager.configure(
+            callbacks,
+            self.callbacks,
+            self.verbose,
+            tags,
+            self.tags,
+            metadata,
+            self.metadata,
+        )
+        new_arg_supported = inspect.signature(self._call).parameters.get("run_manager")
+        run_manager = callback_manager.on_chain_start(
+            # NOTE: This chain is not serializable, since `multiprocessing.Pool` is not
+            dumpd(self),
+            inputs,
+        )
+        try:
+            if new_arg_supported:
+                self._call(inputs, run_manager=run_manager)
+            else:
+                self._call(inputs)
+        except (KeyboardInterrupt, Exception) as e:
+            run_manager.on_chain_error(e)
+            raise e
 
-    def stop(self) -> None:
+    def _main_thread(self):
+        while True:
+            item = self.queue.get()
+            if self.finished.is_set():
+                break
+            self._handle_call(
+                item.inputs,
+                interaction_type=item.interaction_type,
+                who=item.who,
+                # run_manager=item.run_manager,
+            )
+
+    def _handle_call(
+        self,
+        inputs: Dict[str, str],
+        run_manager: Optional[CallbackManagerForChainRun] = None,
+        interaction_type: InteractionType = InteractionType.User,
+        who: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        # Construct a mapping of tool name to tool for easy lookup
+        name_to_tool_map = {tool.name: tool for tool in self.tools}
+        # We construct a mapping from each tool to a color, used for logging.
+        color_mapping = get_color_mapping(
+            [tool.name for tool in self.tools], excluded_colors=["green", "red"]
+        )
+        intermediate_steps: List[Tuple[AgentActionWithId, str]] = []
+        # Let's start tracking the number of iterations and time elapsed
+        iterations = 0
+        time_elapsed = 0.0
+        start_time = time.time()
+        # We now enter the agent loop (until it returns something).
+        while self._should_continue(iterations, time_elapsed):
+            next_step_output = self._take_next_step(
+                name_to_tool_map,
+                color_mapping,
+                inputs,
+                intermediate_steps,
+                run_manager=run_manager,
+                interaction_type=interaction_type,
+            )
+
+            if isinstance(next_step_output, AgentFinish):
+                return self._return(
+                    inputs,
+                    next_step_output,
+                    intermediate_steps,
+                    run_manager=run_manager,
+                    interaction_type=interaction_type,
+                    who=who,
+                )
+
+            intermediate_steps.extend(next_step_output)
+            if len(next_step_output) == 1:
+                next_step_action = next_step_output[0]
+                # See if tool should return directly
+                tool_return = self._get_tool_return(next_step_action)
+                if tool_return is not None:
+                    return self._return(
+                        inputs,
+                        tool_return,
+                        intermediate_steps,
+                        run_manager=run_manager,
+                        interaction_type=interaction_type,
+                        who=who,
+                    )
+            iterations += 1
+            time_elapsed = time.time() - start_time
+        output = self.agent.return_stopped_response(
+            self.early_stopping_method, intermediate_steps, **inputs
+        )
+        return self._return(
+            inputs,
+            output,
+            intermediate_steps,
+            run_manager=run_manager,
+            interaction_type=interaction_type,
+            who=who,
+        )
+
+    def arun(
+        self,
+        *args,
+        **kwargs,
+    ):
+        raise NotImplementedError
+
+    def start(self):
+        self.pool = Pool(processes=self.processes)
+        self.thread = Thread(target=self._main_thread)
+        self.thread.start()
+
+    def stop(self):
+        self.finished.set()
+        self.thread.join()
+
         self.pool.close()
         self.pool.join()
 
+    # NOTE: This is a decorator
     def on_message(self, func: Callable) -> Callable:
         self.emitter.on("message", func)
         return func
 
     def _return(
         self,
+        inputs: Dict[str, Any],
         output: AgentFinish,
         intermediate_steps: list,
         run_manager: Optional[CallbackManagerForChainRun] = None,
+        interaction_type: InteractionType = InteractionType.User,
+        who: Optional[str] = None,
     ) -> Dict[str, Any]:
         if run_manager:
             run_manager.on_agent_finish(output, color="green", verbose=self.verbose)
@@ -88,6 +221,17 @@ class ConcurrentAgentExecutor(AgentExecutor):
         final_output = output.return_values
         if self.return_intermediate_steps:
             final_output["intermediate_steps"] = intermediate_steps
+
+        match interaction_type:
+            case InteractionType.User:
+                self.memory.save_context(inputs, final_output)
+            case InteractionType.Tool:
+                self.memory.chat_memory.add_ai_message(inputs["input"])
+                self.memory.chat_memory.add_ai_message(final_output["output"])
+            case InteractionType.Agent:
+                raise NotImplementedError
+            case _:
+                raise ValueError(f"Unknown interaction type: {interaction_type}")
 
         self.emitter.emit("message", "agent", "message", final_output["output"])
 
@@ -98,7 +242,6 @@ class ConcurrentAgentExecutor(AgentExecutor):
         output: Any,
         job_id: Optional[str] = None,
         tool: Optional[BaseParallelizableTool] = None,
-        # agent_action: Optional[AgentAction] = None,
     ) -> None:
         self.emitter.emit("message", f"{tool.name}:{job_id}", "finish", output)
 
@@ -106,14 +249,21 @@ class ConcurrentAgentExecutor(AgentExecutor):
             {"input": f"Tool {tool.name} with job_id {job_id} finished: {output}"}
         )
 
-        self._system_call(inputs)
+        self.queue.put(
+            Interaction(
+                priority=1,
+                interaction_type=InteractionType.Tool,
+                who=f"{tool.name}:{job_id}",
+                inputs=inputs,
+                # run_manager=None,
+            )
+        )
 
     def _tool_error_callback(
         self,
         exception: Any,
         job_id: Optional[str] = None,
         tool: Optional[BaseParallelizableTool] = None,
-        # agent_action: Optional[AgentAction] = None,
     ):
         self.emitter.emit("message", f"{tool.name}:{job_id}", "error", exception)
 
@@ -121,61 +271,68 @@ class ConcurrentAgentExecutor(AgentExecutor):
             {"input": f"Tool {tool.name} with job_id {job_id} failed: {exception}"}
         )
 
-        self._system_call(inputs)
+        self.queue.put(
+            Interaction(
+                priority=1,
+                interaction_type=InteractionType.Tool,
+                who=f"{tool.name}:{job_id}",
+                inputs=inputs,
+                # run_manager=None,
+            )
+        )
 
-    def _start_parallelizable_tool(
+    def _start_tool(
         self,
         tool: BaseParallelizableTool,
-        agent_action: AgentAction,
-        # color: Optional[str] = None,
-        # run_manager: Optional[CallbackManagerForChainRun] = None,
+        agent_action: AgentActionWithId,
         **tool_run_kwargs,
     ) -> Any:
-        # ! TODO: This does not provide a way of having tracing with callbacks
-        job_id = generate_id()
+        context = {
+            "job_id": agent_action.job_id,
+        }
 
         self.pool.apply_async(
-            tool.run,
-            args=(agent_action.tool_input,),
-            kwds={
-                "job_id": job_id,
-                **tool_run_kwargs,
-            },
+            tool.invoke,
+            args=(
+                context,
+                agent_action.tool_input,
+            ),
+            kwds=tool_run_kwargs,
             callback=lambda _: self._tool_callback(
                 _,
-                job_id=job_id,
+                job_id=agent_action.job_id,
                 tool=tool,
-                # agent_action=agent_action,
             ),
             error_callback=lambda _: self._tool_error_callback(
                 _,
-                job_id=job_id,
+                job_id=agent_action.job_id,
                 tool=tool,
-                # agent_action=agent_action,
             ),
         )
 
-        self.emitter.emit("message", f"{tool.name}:{job_id}", "start", "started")
+        self.emitter.emit(
+            "message", f"{tool.name}:{agent_action.job_id}", "start", "started"
+        )
 
-        return START_BACKGROUND_JOB.format(tool_name=tool.name, job_id=job_id)
+        return START_BACKGROUND_JOB.format(
+            tool_name=tool.name, job_id=agent_action.job_id
+        )
 
     def _take_next_step(
         self,
         name_to_tool_map: Dict[str, BaseParallelizableTool],
         color_mapping: Dict[str, str],
         inputs: Dict[str, str],
-        intermediate_steps: List[Tuple[AgentAction, str]],
+        intermediate_steps: List[Tuple[AgentActionWithId, str]],
         run_manager: Optional[CallbackManagerForChainRun] = None,
-    ) -> Union[AgentFinish, List[Tuple[AgentAction, str]]]:
-        """Take a single step in the thought-action-observation loop.
-
-        Override this to take control of how the agent makes and acts on choices.
-        """
+        interaction_type: InteractionType = InteractionType.User,
+    ) -> Union[AgentFinish, List[Tuple[AgentActionWithId, str]]]:
         try:
             # Call the LLM to see what to do.
             output = self.agent.plan(
                 intermediate_steps,
                 callbacks=run_manager.get_child() if run_manager else None,
+                interaction_type=interaction_type,
                 **inputs,
             )
         except OutputParserException as exception:
@@ -200,7 +357,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
             else:
                 # pylint: disable=raise-missing-from
                 raise ValueError("Got unexpected type of `handle_parsing_errors`")
-            output = AgentAction("_Exception", observation, text)
+            output = AgentActionWithId("_Exception", observation, text)
             if run_manager:
                 run_manager.on_agent_action(output, color="green")
             tool_run_kwargs = self.agent.tool_run_logging_kwargs()
@@ -215,8 +372,8 @@ class ConcurrentAgentExecutor(AgentExecutor):
         # If the tool chosen is the finishing tool, then we end and return.
         if isinstance(output, AgentFinish):
             return output
-        actions: List[AgentAction]
-        if isinstance(output, AgentAction):
+        actions: List[AgentActionWithId]
+        if isinstance(output, AgentActionWithId):
             actions = [output]
         else:
             actions = output
@@ -235,7 +392,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
                     tool_run_kwargs["llm_prefix"] = ""
 
                 if hasattr(tool, "is_parallelizable") and tool.is_parallelizable:
-                    observation = self._start_parallelizable_tool(
+                    observation = self._start_tool(
                         tool,
                         agent_action,
                         # color,
@@ -267,414 +424,15 @@ class ConcurrentAgentExecutor(AgentExecutor):
         self,
         inputs: Dict[str, str],
         run_manager: Optional[CallbackManagerForChainRun] = None,
-    ) -> Dict[str, Any]:
-        """Run text through and get agent response."""
-
-        with self.lock:
-            # Construct a mapping of tool name to tool for easy lookup
-            name_to_tool_map = {tool.name: tool for tool in self.tools}
-            # We construct a mapping from each tool to a color, used for logging.
-            color_mapping = get_color_mapping(
-                [tool.name for tool in self.tools], excluded_colors=["green", "red"]
+        priority: int = 0,
+        interaction_type: InteractionType = InteractionType.User,
+    ):
+        self.queue.put(
+            Interaction(
+                priority=priority,
+                interaction_type=interaction_type,
+                who="user",
+                inputs=inputs,
+                # run_manager=run_manager,
             )
-            intermediate_steps: List[Tuple[AgentAction, str]] = []
-            # Let's start tracking the number of iterations and time elapsed
-            iterations = 0
-            time_elapsed = 0.0
-            start_time = time.time()
-            # We now enter the agent loop (until it returns something).
-            while self._should_continue(iterations, time_elapsed):
-                next_step_output = self._take_next_step(
-                    name_to_tool_map,
-                    color_mapping,
-                    inputs,
-                    intermediate_steps,
-                    run_manager=run_manager,
-                )
-                if isinstance(next_step_output, AgentFinish):
-                    return self._return(
-                        next_step_output, intermediate_steps, run_manager=run_manager
-                    )
-
-                intermediate_steps.extend(next_step_output)
-                if len(next_step_output) == 1:
-                    next_step_action = next_step_output[0]
-                    # See if tool should return directly
-                    tool_return = self._get_tool_return(next_step_action)
-                    if tool_return is not None:
-                        return self._return(
-                            tool_return, intermediate_steps, run_manager=run_manager
-                        )
-                iterations += 1
-                time_elapsed = time.time() - start_time
-            output = self.agent.return_stopped_response(
-                self.early_stopping_method, intermediate_steps, **inputs
-            )
-            return self._return(output, intermediate_steps, run_manager=run_manager)
-
-    def _system_take_next_step(
-        self,
-        name_to_tool_map: Dict[str, BaseParallelizableTool],
-        color_mapping: Dict[str, str],
-        inputs: Dict[str, str],
-        intermediate_steps: List[Tuple[AgentAction, str]],
-        run_manager: Optional[CallbackManagerForChainRun] = None,
-    ) -> Union[AgentFinish, List[Tuple[AgentAction, str]]]:
-        """Take a single step in the thought-action-observation loop.
-
-        Override this to take control of how the agent makes and acts on choices.
-        """
-        try:
-            # pylint: disable=protected-access
-            output = self.agent._system_plan(
-                intermediate_steps,
-                callbacks=run_manager.get_child() if run_manager else None,
-                **inputs,
-            )
-        except OutputParserException as exception:
-            if isinstance(self.handle_parsing_errors, bool):
-                raise_error = not self.handle_parsing_errors
-            else:
-                raise_error = False
-            if raise_error:
-                raise exception
-            text = str(exception)
-            if isinstance(self.handle_parsing_errors, bool):
-                if exception.send_to_llm:
-                    observation = str(exception.observation)
-                    text = str(exception.llm_output)
-                else:
-                    observation = "Invalid or incomplete response"
-            elif isinstance(self.handle_parsing_errors, str):
-                observation = self.handle_parsing_errors
-            elif callable(self.handle_parsing_errors):
-                # pylint: disable=not-callable
-                observation = self.handle_parsing_errors(exception)
-            else:
-                # pylint: disable=raise-missing-from
-                raise ValueError("Got unexpected type of `handle_parsing_errors`")
-            output = AgentAction("_Exception", observation, text)
-            if run_manager:
-                run_manager.on_agent_action(output, color="green")
-            tool_run_kwargs = self.agent.tool_run_logging_kwargs()
-            observation = ExceptionTool().run(
-                output.tool_input,
-                verbose=self.verbose,
-                color=None,
-                callbacks=run_manager.get_child() if run_manager else None,
-                **tool_run_kwargs,
-            )
-            return [(output, observation)]
-        # If the tool chosen is the finishing tool, then we end and return.
-        if isinstance(output, AgentFinish):
-            return output
-        actions: List[AgentAction]
-        if isinstance(output, AgentAction):
-            actions = [output]
-        else:
-            actions = output
-        result = []
-        for agent_action in actions:
-            if run_manager:
-                run_manager.on_agent_action(agent_action, color="green")
-            # Otherwise we lookup the tool
-            if agent_action.tool in name_to_tool_map:
-                tool = name_to_tool_map[agent_action.tool]
-                return_direct = tool.return_direct
-                color = color_mapping[agent_action.tool]
-                tool_run_kwargs = self.agent.tool_run_logging_kwargs()
-
-                if return_direct:
-                    tool_run_kwargs["llm_prefix"] = ""
-
-                if hasattr(tool, "is_parallelizable") and tool.is_parallelizable:
-                    observation = self._start_parallelizable_tool(
-                        tool,
-                        agent_action,
-                        # color,
-                        # run_manager,
-                        **tool_run_kwargs,
-                    )
-                else:
-                    # We then call the tool on the tool input to get an observation
-                    observation = tool.run(
-                        agent_action.tool_input,
-                        verbose=self.verbose,
-                        color=color,
-                        callbacks=run_manager.get_child() if run_manager else None,
-                        **tool_run_kwargs,
-                    )
-            else:
-                tool_run_kwargs = self.agent.tool_run_logging_kwargs()
-                observation = InvalidTool().run(
-                    agent_action.tool,
-                    verbose=self.verbose,
-                    color=None,
-                    callbacks=run_manager.get_child() if run_manager else None,
-                    **tool_run_kwargs,
-                )
-            result.append((agent_action, observation))
-        return result
-
-    def _system_call(
-        self,
-        inputs: Dict[str, str],
-        run_manager: Optional[CallbackManagerForChainRun] = None,
-    ) -> Dict[str, Any]:
-        """Run text through and get agent response."""
-
-        with self.lock:
-            # Construct a mapping of tool name to tool for easy lookup
-            name_to_tool_map = {tool.name: tool for tool in self.tools}
-            # We construct a mapping from each tool to a color, used for logging.
-            color_mapping = get_color_mapping(
-                [tool.name for tool in self.tools], excluded_colors=["green", "red"]
-            )
-            intermediate_steps: List[Tuple[AgentAction, str]] = []
-            # Let's start tracking the number of iterations and time elapsed
-            iterations = 0
-            time_elapsed = 0.0
-            start_time = time.time()
-            # We now enter the agent loop (until it returns something).
-            while self._should_continue(iterations, time_elapsed):
-                next_step_output = self._system_take_next_step(
-                    name_to_tool_map,
-                    color_mapping,
-                    inputs,
-                    intermediate_steps,
-                    run_manager=run_manager,
-                )
-
-                if isinstance(next_step_output, AgentFinish):
-                    return self._return(
-                        next_step_output, intermediate_steps, run_manager=run_manager
-                    )
-
-                intermediate_steps.extend(next_step_output)
-                if len(next_step_output) == 1:
-                    next_step_action = next_step_output[0]
-                    # See if tool should return directly
-                    tool_return = self._get_tool_return(next_step_action)
-                    if tool_return is not None:
-                        return self._return(
-                            tool_return, intermediate_steps, run_manager=run_manager
-                        )
-                iterations += 1
-                time_elapsed = time.time() - start_time
-            output = self.agent.return_stopped_response(
-                self.early_stopping_method, intermediate_steps, **inputs
-            )
-            return self._return(output, intermediate_steps, run_manager=run_manager)
-
-    async def _areturn(
-        self,
-        output: AgentFinish,
-        intermediate_steps: list,
-        run_manager: Optional[AsyncCallbackManagerForChainRun] = None,
-    ) -> Dict[str, Any]:
-        if run_manager:
-            await run_manager.on_agent_finish(
-                output, color="green", verbose=self.verbose
-            )
-
-        final_output = output.return_values
-        if self.return_intermediate_steps:
-            final_output["intermediate_steps"] = intermediate_steps
-
-        self.emitter.emit("message", "agent", "message", final_output["output"])
-
-        return final_output
-
-    async def _astart_parallelizable_tool(
-        self,
-        tool: BaseParallelizableTool,
-        agent_action: AgentAction,
-        # color: Optional[str] = None,
-        # run_manager: Optional[AsyncCallbackManagerForChainRun] = None,
-        **tool_run_kwargs,
-    ) -> Any:
-        return self._start_parallelizable_tool(
-            tool=tool,
-            agent_action=agent_action,
-            # color=color,
-            # run_manager=run_manager,
-            **tool_run_kwargs,
         )
-
-    async def _atake_next_step(
-        self,
-        name_to_tool_map: Dict[str, BaseParallelizableTool],
-        color_mapping: Dict[str, str],
-        inputs: Dict[str, str],
-        intermediate_steps: List[Tuple[AgentAction, str]],
-        run_manager: Optional[AsyncCallbackManagerForChainRun] = None,
-    ) -> Union[AgentFinish, List[Tuple[AgentAction, str]]]:
-        """Take a single step in the thought-action-observation loop.
-
-        Override this to take control of how the agent makes and acts on choices.
-        """
-        try:
-            # Call the LLM to see what to do.
-            output = await self.agent.aplan(
-                intermediate_steps,
-                callbacks=run_manager.get_child() if run_manager else None,
-                **inputs,
-            )
-        except OutputParserException as exception:
-            if isinstance(self.handle_parsing_errors, bool):
-                raise_error = not self.handle_parsing_errors
-            else:
-                raise_error = False
-            if raise_error:
-                raise exception
-            text = str(exception)
-            if isinstance(self.handle_parsing_errors, bool):
-                if exception.send_to_llm:
-                    observation = str(exception.observation)
-                    text = str(exception.llm_output)
-                else:
-                    observation = "Invalid or incomplete response"
-            elif isinstance(self.handle_parsing_errors, str):
-                observation = self.handle_parsing_errors
-            elif callable(self.handle_parsing_errors):
-                # pylint: disable=not-callable
-                observation = self.handle_parsing_errors(exception)
-            else:
-                # pylint: disable=raise-missing-from
-                raise ValueError("Got unexpected type of `handle_parsing_errors`")
-            output = AgentAction("_Exception", observation, text)
-            tool_run_kwargs = self.agent.tool_run_logging_kwargs()
-            observation = await ExceptionTool().arun(
-                output.tool_input,
-                verbose=self.verbose,
-                color=None,
-                callbacks=run_manager.get_child() if run_manager else None,
-                **tool_run_kwargs,
-            )
-            return [(output, observation)]
-        # If the tool chosen is the finishing tool, then we end and return.
-        if isinstance(output, AgentFinish):
-            return output
-        actions: List[AgentAction]
-        if isinstance(output, AgentAction):
-            actions = [output]
-        else:
-            actions = output
-
-        async def _aperform_agent_action(
-            agent_action: AgentAction,
-        ) -> Tuple[AgentAction, str]:
-            if run_manager:
-                await run_manager.on_agent_action(
-                    agent_action, verbose=self.verbose, color="green"
-                )
-            # Otherwise we lookup the tool
-            if agent_action.tool in name_to_tool_map:
-                tool = name_to_tool_map[agent_action.tool]
-                return_direct = tool.return_direct
-                color = color_mapping[agent_action.tool]
-                tool_run_kwargs = self.agent.tool_run_logging_kwargs()
-
-                if return_direct:
-                    tool_run_kwargs["llm_prefix"] = ""
-
-                if hasattr(tool, "is_parallelizable") and tool.is_parallelizable:
-                    observation = await self._astart_parallelizable_tool(
-                        tool,
-                        agent_action,
-                        # color,
-                        # run_manager,
-                        **tool_run_kwargs,
-                    )
-                else:
-                    # We then call the tool on the tool input to get an observation
-                    observation = await tool.arun(
-                        agent_action.tool_input,
-                        verbose=self.verbose,
-                        color=color,
-                        callbacks=run_manager.get_child() if run_manager else None,
-                        **tool_run_kwargs,
-                    )
-            else:
-                tool_run_kwargs = self.agent.tool_run_logging_kwargs()
-                observation = await InvalidTool().arun(
-                    agent_action.tool,
-                    verbose=self.verbose,
-                    color=None,
-                    callbacks=run_manager.get_child() if run_manager else None,
-                    **tool_run_kwargs,
-                )
-            return agent_action, observation
-
-        # Use asyncio.gather to run multiple tool.arun() calls concurrently
-        result = await asyncio.gather(
-            *[_aperform_agent_action(agent_action) for agent_action in actions]
-        )
-
-        return list(result)
-
-    async def _acall(
-        self,
-        inputs: Dict[str, str],
-        run_manager: Optional[AsyncCallbackManagerForChainRun] = None,
-    ) -> Dict[str, str]:
-        """Run text through and get agent response."""
-
-        with self.lock:
-            # Construct a mapping of tool name to tool for easy lookup
-            name_to_tool_map = {tool.name: tool for tool in self.tools}
-            # We construct a mapping from each tool to a color, used for logging.
-            color_mapping = get_color_mapping(
-                [tool.name for tool in self.tools], excluded_colors=["green"]
-            )
-            intermediate_steps: List[Tuple[AgentAction, str]] = []
-            # Let's start tracking the number of iterations and time elapsed
-            iterations = 0
-            time_elapsed = 0.0
-            start_time = time.time()
-            # We now enter the agent loop (until it returns something).
-            async with asyncio_timeout(self.max_execution_time):
-                try:
-                    while self._should_continue(iterations, time_elapsed):
-                        next_step_output = await self._atake_next_step(
-                            name_to_tool_map,
-                            color_mapping,
-                            inputs,
-                            intermediate_steps,
-                            run_manager=run_manager,
-                        )
-                        if isinstance(next_step_output, AgentFinish):
-                            return await self._areturn(
-                                next_step_output,
-                                intermediate_steps,
-                                run_manager=run_manager,
-                            )
-
-                        intermediate_steps.extend(next_step_output)
-                        if len(next_step_output) == 1:
-                            next_step_action = next_step_output[0]
-                            # See if tool should return directly
-                            tool_return = self._get_tool_return(next_step_action)
-                            if tool_return is not None:
-                                return await self._areturn(
-                                    tool_return,
-                                    intermediate_steps,
-                                    run_manager=run_manager,
-                                )
-
-                        iterations += 1
-                        time_elapsed = time.time() - start_time
-                    output = self.agent.return_stopped_response(
-                        self.early_stopping_method, intermediate_steps, **inputs
-                    )
-                    return await self._areturn(
-                        output, intermediate_steps, run_manager=run_manager
-                    )
-                except TimeoutError:
-                    # stop early when interrupted by the async timeout
-                    output = self.agent.return_stopped_response(
-                        self.early_stopping_method, intermediate_steps, **inputs
-                    )
-                    return await self._areturn(
-                        output, intermediate_steps, run_manager=run_manager
-                    )

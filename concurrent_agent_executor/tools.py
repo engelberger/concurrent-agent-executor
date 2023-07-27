@@ -2,28 +2,20 @@
 
 from __future__ import annotations
 
-from langchain.tools.base import BaseTool
+from typing import Union
 
 # pylint: disable=no-name-in-module
 from pydantic import BaseModel, Field
 
-
-class BaseParallelizableTool(BaseTool):
-    """Base class for tools that can be run in parallel with other tools."""
-
-    is_parallelizable: bool = Field(
-        default=False,
-        const=True,
-        description="Whether this tool can be run in parallel with other tools.",
-    )
+from concurrent_agent_executor.models import BaseParallelizableTool
 
 
 class WaitToolSchema(BaseModel):
     """Schema for the WaitTool tool."""
 
-    job_id: str = Field(
+    job_id_or_ids: Union[str, list[str]] = Field(
         ...,
-        description="The job ID to wait for.",
+        description="The job IDs to wait for.",
     )
 
 
@@ -37,21 +29,17 @@ class WaitTool(BaseParallelizableTool):
     return_direct = True
     args_schema: WaitToolSchema = WaitToolSchema
 
-    # pylint: disable=arguments-differ
     def _run(
         self,
-        job_id: str,
-        # run_manager: Optional[CallbackManagerForToolRun] = None,
+        job_id_or_ids: str,
     ) -> str:
-        return f"Waiting for job {job_id}"
+        return f"Waiting for job(s) {job_id_or_ids}"
 
-    # pylint: disable=arguments-differ
     async def _arun(
         self,
-        job_id: str,
-        # run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
+        job_id_or_ids: str,
     ) -> str:
-        return self._run(job_id=job_id)
+        return self._run(job_id=job_id_or_ids)
 
 
 class CancelTool(BaseParallelizableTool):
@@ -60,21 +48,16 @@ class CancelTool(BaseParallelizableTool):
     name = "_Cancel"
     description = "This tool cancels other tools that run in the background."
 
-    # pylint: disable=arguments-differ
     def _run(
         self,
         job_id: str,
-        # run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         # ! TODO: Implement cancellation logic
-        # return f"Cancelling job {job_id}"
         raise NotImplementedError
 
-    # pylint: disable=arguments-differ
     async def _arun(
         self,
         job_id: str,
-        # run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> str:
         return self._run(job_id=job_id)
 
@@ -87,20 +70,14 @@ class StatusTool(BaseParallelizableTool):
         "This tool checks the status of other tools that run in the background."
     )
 
-    # pylint: disable=arguments-differ
     def _run(
         self,
         job_id: str,
-        # run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
-        # ! TODO: Implement status logic
-        # return f"Checking status of job {job_id}"
         raise NotImplementedError
 
-    # pylint: disable=arguments-differ
     async def _arun(
         self,
         job_id: str,
-        # run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> str:
         return self._run(job_id=job_id)
