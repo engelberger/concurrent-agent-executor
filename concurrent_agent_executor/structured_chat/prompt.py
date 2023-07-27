@@ -39,7 +39,7 @@ Action:
 ```"""
 
 # pylint: disable=line-too-long
-SUFFIX = """Begin! Reminder to ALWAYS respond with a valid json blob of a single action. Reminder to use the _Wait tool to WAIT FOR OTHER TOOLS THAT RUN IN THE BACKGROUND. Sometimes you will schedule TOOLS/JOBS TO RUN IN THE BACKGROUND, AND THE SYSTEM WILL TELL YOU WHEN THEY ARE DONE RUNNING. Use tools if necessary. Respond directly if appropriate. Format is Action:```$JSON_BLOB```then Observation:.
+SUFFIX = """Begin! Reminder to ALWAYS respond with a valid json blob of a single action. Use tools if necessary. Sometimes you will schedule tools to RUN IN THE BACKGROUND; in those cases, the system will tell you when they are done running. You can have multiple tools running in the background. Respond directly if appropriate. Format is Action:```$JSON_BLOB```then Observation:.
 Thought:"""
 
 RESULT = """Result: {result}"""

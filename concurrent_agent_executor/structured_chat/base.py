@@ -243,6 +243,9 @@ class ConcurrentStructuredChatAgent(Agent):
             Action specifying what tool to use.
         """
         full_inputs = self.get_full_inputs(intermediate_steps, **kwargs)
+
+        print("plan", f"{full_inputs=}")
+
         if who == "agent":
             full_output = self.llm_chain.predict(callbacks=callbacks, **full_inputs)
         else:

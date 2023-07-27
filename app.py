@@ -10,7 +10,7 @@ from concurrent_agent_executor import initialize
 from examples.slow_random_number import RandomNumberTool
 
 _LOOP = asyncio.get_event_loop()
-executor = initialize(tools=[RandomNumberTool()])
+executor = initialize(tools=[RandomNumberTool()], processes=4)
 
 task_list: chainlit.TaskList = None
 

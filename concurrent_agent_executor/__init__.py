@@ -32,13 +32,14 @@ def initialize(
         llm = ChatOpenAI(
             temperature=0.3,
             model="gpt-4",
+            # model="gpt-3.5-turbo-16k",
         )
 
     if tools is None:
         tools = []
 
     tools = [
-        WaitTool(),
+        # WaitTool(),
         *tools,
     ]
 

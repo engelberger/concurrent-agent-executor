@@ -59,13 +59,14 @@ class RandomNumberTool(BaseParallelizableTool):
         self,
         a: int,
         b: int,
-        *,
-        job_id: str,
     ):
+        job_id = self.context.get("job_id", None)
+
         print(f"Running job {job_id}...")
 
         try:
             time.sleep(10)
+            print(f"Finishing job {job_id}...")
             return f"The random number is: {random.randint(a, b)}"
         # pylint: disable=broad-except
         except Exception as exception:
