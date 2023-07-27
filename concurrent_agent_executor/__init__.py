@@ -7,8 +7,9 @@ from langchain.prompts import MessagesPlaceholder
 from langchain.memory import ConversationBufferMemory
 
 from concurrent_agent_executor.base import ConcurrentAgentExecutor
-from concurrent_agent_executor.tools import BaseParallelizableTool, WaitTool
+from concurrent_agent_executor.tools import WaitTool
 from concurrent_agent_executor.structured_chat.base import ConcurrentStructuredChatAgent
+from concurrent_agent_executor.models import BaseParallelizableTool
 
 __all__ = [
     "ConcurrentAgentExecutor",

@@ -10,7 +10,6 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from threading import Thread, Event
 from multiprocessing import Pool
 from queue import PriorityQueue
-from dataclasses import dataclass, field
 
 from pyee import AsyncIOEventEmitter
 from pydantic import Field
@@ -27,27 +26,21 @@ from langchain.callbacks.manager import (
 )
 from langchain.input import get_color_mapping
 from langchain.schema import (
-    AgentAction,
     AgentFinish,
     OutputParserException,
 )
 from langchain.memory import ConversationBufferMemory
 from langchain.load.dump import dumpd
 from human_id import generate_id
-from concurrent_agent_executor.models import InteractionType
 
 from concurrent_agent_executor.structured_chat.base import ConcurrentStructuredChatAgent
 from concurrent_agent_executor.structured_chat.prompt import START_BACKGROUND_JOB
-from concurrent_agent_executor.tools import BaseParallelizableTool
-
-
-@dataclass(order=True)
-class PrioritizedItem:
-    priority: int
-
-    interaction_type: InteractionType = field(compare=False)
-    who: str = field(compare=False)
-    inputs: dict[str, Any] = field(compare=False)
+from concurrent_agent_executor.models import (
+    Interaction,
+    InteractionType,
+    AgentActionWithId,
+    BaseParallelizableTool,
+)
 
 
 class ConcurrentAgentExecutor(AgentExecutor):
@@ -61,7 +54,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
     emitter: AsyncIOEventEmitter = Field(
         default_factory=lambda: AsyncIOEventEmitter(loop=asyncio.new_event_loop()),
     )
-    queue: PriorityQueue[PrioritizedItem] = Field(
+    queue: PriorityQueue[Interaction] = Field(
         default_factory=PriorityQueue,
     )
     finished: Event = Field(
@@ -110,13 +103,6 @@ class ConcurrentAgentExecutor(AgentExecutor):
         except (KeyboardInterrupt, Exception) as e:
             run_manager.on_chain_error(e)
             raise e
-        # run_manager.on_chain_end(outputs)
-        # final_outputs: Dict[str, Any] = self.prep_outputs(
-        #     inputs, outputs, return_only_outputs
-        # )
-        # if include_run_info:
-        #     final_outputs[RUN_KEY] = RunInfo(run_id=run_manager.run_id)
-        # return final_outputs
 
     def _main_thread(self):
         while True:
@@ -143,7 +129,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         color_mapping = get_color_mapping(
             [tool.name for tool in self.tools], excluded_colors=["green", "red"]
         )
-        intermediate_steps: List[Tuple[AgentAction, str]] = []
+        intermediate_steps: List[Tuple[AgentActionWithId, str]] = []
         # Let's start tracking the number of iterations and time elapsed
         iterations = 0
         time_elapsed = 0.0
@@ -265,7 +251,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         )
 
         self.queue.put(
-            PrioritizedItem(
+            Interaction(
                 priority=1,
                 interaction_type=InteractionType.Tool,
                 who=f"{tool.name}:{job_id}",
@@ -287,7 +273,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         )
 
         self.queue.put(
-            PrioritizedItem(
+            Interaction(
                 priority=1,
                 interaction_type=InteractionType.Tool,
                 who=f"{tool.name}:{job_id}",
@@ -299,13 +285,11 @@ class ConcurrentAgentExecutor(AgentExecutor):
     def _start_tool(
         self,
         tool: BaseParallelizableTool,
-        agent_action: AgentAction,
+        agent_action: AgentActionWithId,
         **tool_run_kwargs,
     ) -> Any:
-        job_id = generate_id()
-
         context = {
-            "job_id": job_id,
+            "job_id": agent_action.job_id,
         }
 
         self.pool.apply_async(
@@ -317,29 +301,33 @@ class ConcurrentAgentExecutor(AgentExecutor):
             kwds=tool_run_kwargs,
             callback=lambda _: self._tool_callback(
                 _,
-                job_id=job_id,
+                job_id=agent_action.job_id,
                 tool=tool,
             ),
             error_callback=lambda _: self._tool_error_callback(
                 _,
-                job_id=job_id,
+                job_id=agent_action.job_id,
                 tool=tool,
             ),
         )
 
-        self.emitter.emit("message", f"{tool.name}:{job_id}", "start", "started")
+        self.emitter.emit(
+            "message", f"{tool.name}:{agent_action.job_id}", "start", "started"
+        )
 
-        return START_BACKGROUND_JOB.format(tool_name=tool.name, job_id=job_id)
+        return START_BACKGROUND_JOB.format(
+            tool_name=tool.name, job_id=agent_action.job_id
+        )
 
     def _take_next_step(
         self,
         name_to_tool_map: Dict[str, BaseParallelizableTool],
         color_mapping: Dict[str, str],
         inputs: Dict[str, str],
-        intermediate_steps: List[Tuple[AgentAction, str]],
+        intermediate_steps: List[Tuple[AgentActionWithId, str]],
         run_manager: Optional[CallbackManagerForChainRun] = None,
         interaction_type: InteractionType = InteractionType.User,
-    ) -> Union[AgentFinish, List[Tuple[AgentAction, str]]]:
+    ) -> Union[AgentFinish, List[Tuple[AgentActionWithId, str]]]:
         try:
             # Call the LLM to see what to do.
             output = self.agent.plan(
@@ -370,7 +358,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
             else:
                 # pylint: disable=raise-missing-from
                 raise ValueError("Got unexpected type of `handle_parsing_errors`")
-            output = AgentAction("_Exception", observation, text)
+            output = AgentActionWithId("_Exception", observation, text)
             if run_manager:
                 run_manager.on_agent_action(output, color="green")
             tool_run_kwargs = self.agent.tool_run_logging_kwargs()
@@ -385,8 +373,8 @@ class ConcurrentAgentExecutor(AgentExecutor):
         # If the tool chosen is the finishing tool, then we end and return.
         if isinstance(output, AgentFinish):
             return output
-        actions: List[AgentAction]
-        if isinstance(output, AgentAction):
+        actions: List[AgentActionWithId]
+        if isinstance(output, AgentActionWithId):
             actions = [output]
         else:
             actions = output
@@ -441,7 +429,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         interaction_type: InteractionType = InteractionType.User,
     ):
         self.queue.put(
-            PrioritizedItem(
+            Interaction(
                 priority=priority,
                 interaction_type=interaction_type,
                 who="user",

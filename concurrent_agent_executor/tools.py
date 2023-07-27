@@ -2,42 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Union
-
-from langchain.tools.base import BaseTool
+from typing import Union
 
 # pylint: disable=no-name-in-module
 from pydantic import BaseModel, Field
 
-
-class BaseParallelizableTool(BaseTool):
-    """Base class for tools that can be run in parallel with other tools."""
-
-    is_parallelizable: bool = Field(
-        default=False,
-        const=True,
-        description="Whether this tool can be run in parallel with other tools.",
-    )
-
-    context: Any
-
-    def _set_context(self, **kwargs) -> None:
-        """Sets the context of the tool."""
-
-        if self.context is None:
-            self.context = {}
-
-        self.context.update(kwargs)
-
-    def invoke(
-        self,
-        context: dict[str, Any],
-        *args,
-        **kwargs,
-    ) -> Any:
-        """Invokes the tool."""
-        self._set_context(**context)
-        return self.run(*args, **kwargs)
+from concurrent_agent_executor.models import BaseParallelizableTool
 
 
 class WaitToolSchema(BaseModel):

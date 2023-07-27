@@ -18,7 +18,7 @@ from langchain.schema import AgentAction, AgentFinish
 from langchain.callbacks.manager import Callbacks
 from concurrent_agent_executor.models import InteractionType
 
-from concurrent_agent_executor.tools import BaseParallelizableTool
+from concurrent_agent_executor.models import BaseParallelizableTool
 from concurrent_agent_executor.structured_chat.output_parser import (
     StructuredChatOutputParserWithRetries,
 )
