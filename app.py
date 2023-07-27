@@ -1,4 +1,5 @@
 import asyncio
+from typing import Optional
 
 import chainlit
 
@@ -12,7 +13,7 @@ from examples.slow_random_number import RandomNumberTool
 _LOOP = asyncio.get_event_loop()
 executor = initialize(tools=[RandomNumberTool()], processes=4)
 
-task_list: chainlit.TaskList = None
+task_list: Optional[chainlit.TaskList] = None
 
 
 def _context_hack():

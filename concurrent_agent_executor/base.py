@@ -6,12 +6,14 @@ import inspect
 import asyncio
 import time
 
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from threading import Thread, Event
 from multiprocessing import Pool
 from queue import PriorityQueue
-from pyee import AsyncIOEventEmitter
+from dataclasses import dataclass, field
 
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from pyee import AsyncIOEventEmitter
+from pydantic import Field
 
 from langchain.agents.tools import InvalidTool, BaseTool
 from langchain.agents.agent import (
@@ -19,7 +21,6 @@ from langchain.agents.agent import (
     AgentExecutor,
 )
 from langchain.callbacks.manager import (
-    AsyncCallbackManagerForChainRun,
     CallbackManager,
     CallbackManagerForChainRun,
     Callbacks,
@@ -29,46 +30,52 @@ from langchain.schema import (
     AgentAction,
     AgentFinish,
     OutputParserException,
-    RUN_KEY,
-    RunInfo,
 )
+from langchain.memory import ConversationBufferMemory
 from langchain.load.dump import dumpd
 from human_id import generate_id
+from concurrent_agent_executor.models import InteractionType
 
 from concurrent_agent_executor.structured_chat.base import ConcurrentStructuredChatAgent
 from concurrent_agent_executor.structured_chat.prompt import START_BACKGROUND_JOB
 from concurrent_agent_executor.tools import BaseParallelizableTool
 
 
+@dataclass(order=True)
+class PrioritizedItem:
+    priority: int
+
+    interaction_type: InteractionType = field(compare=False)
+    who: str = field(compare=False)
+    inputs: dict[str, Any] = field(compare=False)
+
+
 class ConcurrentAgentExecutor(AgentExecutor):
-    """Consists of an async agent using tools."""
-
     agent: ConcurrentStructuredChatAgent
-    """The agent to run for creating a plan and determining actions
-    to take at each step of the execution loop."""
     tools: Sequence[Union[BaseParallelizableTool, BaseTool]]
-    """The valid tools the agent can call."""
+    memory: Optional[ConversationBufferMemory] = None
 
-    processes: Optional[int]
+    processes: int = Field(
+        default=4,
+    )
+    emitter: AsyncIOEventEmitter = Field(
+        default_factory=lambda: AsyncIOEventEmitter(loop=asyncio.new_event_loop()),
+    )
+    queue: PriorityQueue[PrioritizedItem] = Field(
+        default_factory=PriorityQueue,
+    )
+    finished: Event = Field(
+        default_factory=Event,
+    )
 
-    emitter: Any  # emitter: AsyncIOEventEmitter
-
-    finished: Any  # finished: Event
-
-    thread: Any  # Optional[Thread]
-    queue: Any  # Optional[PriorityQueue]
-    pool: Any  # pool: Pool
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-
-        self.emitter = AsyncIOEventEmitter(loop=asyncio.new_event_loop())
+    thread: Optional[Thread]
+    pool: Optional[Any]
 
     def __enter__(self) -> ConcurrentAgentExecutor:
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
+    def __exit__(self, exc_type, exc_value, traceback):
         self.stop()
 
     def __call__(
@@ -91,15 +98,15 @@ class ConcurrentAgentExecutor(AgentExecutor):
         )
         new_arg_supported = inspect.signature(self._call).parameters.get("run_manager")
         run_manager = callback_manager.on_chain_start(
+            # NOTE: This chain is not serializable, since `multiprocessing.Pool` is not
             dumpd(self),
             inputs,
         )
         try:
-            outputs = (
+            if new_arg_supported:
                 self._call(inputs, run_manager=run_manager)
-                if new_arg_supported
-                else self._call(inputs)
-            )
+            else:
+                self._call(inputs)
         except (KeyboardInterrupt, Exception) as e:
             run_manager.on_chain_error(e)
             raise e
@@ -111,6 +118,85 @@ class ConcurrentAgentExecutor(AgentExecutor):
         #     final_outputs[RUN_KEY] = RunInfo(run_id=run_manager.run_id)
         # return final_outputs
 
+    def _main_thread(self):
+        while True:
+            item = self.queue.get()
+            if self.finished.is_set():
+                break
+            self._handle_call(
+                item.inputs,
+                interaction_type=item.interaction_type,
+                who=item.who,
+                # run_manager=item.run_manager,
+            )
+
+    def _handle_call(
+        self,
+        inputs: Dict[str, str],
+        run_manager: Optional[CallbackManagerForChainRun] = None,
+        interaction_type: InteractionType = InteractionType.User,
+        who: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        # Construct a mapping of tool name to tool for easy lookup
+        name_to_tool_map = {tool.name: tool for tool in self.tools}
+        # We construct a mapping from each tool to a color, used for logging.
+        color_mapping = get_color_mapping(
+            [tool.name for tool in self.tools], excluded_colors=["green", "red"]
+        )
+        intermediate_steps: List[Tuple[AgentAction, str]] = []
+        # Let's start tracking the number of iterations and time elapsed
+        iterations = 0
+        time_elapsed = 0.0
+        start_time = time.time()
+        # We now enter the agent loop (until it returns something).
+        while self._should_continue(iterations, time_elapsed):
+            next_step_output = self._take_next_step(
+                name_to_tool_map,
+                color_mapping,
+                inputs,
+                intermediate_steps,
+                run_manager=run_manager,
+                interaction_type=interaction_type,
+            )
+
+            if isinstance(next_step_output, AgentFinish):
+                return self._return(
+                    inputs,
+                    next_step_output,
+                    intermediate_steps,
+                    run_manager=run_manager,
+                    interaction_type=interaction_type,
+                    who=who,
+                )
+
+            intermediate_steps.extend(next_step_output)
+            if len(next_step_output) == 1:
+                next_step_action = next_step_output[0]
+                # See if tool should return directly
+                tool_return = self._get_tool_return(next_step_action)
+                if tool_return is not None:
+                    return self._return(
+                        inputs,
+                        tool_return,
+                        intermediate_steps,
+                        run_manager=run_manager,
+                        interaction_type=interaction_type,
+                        who=who,
+                    )
+            iterations += 1
+            time_elapsed = time.time() - start_time
+        output = self.agent.return_stopped_response(
+            self.early_stopping_method, intermediate_steps, **inputs
+        )
+        return self._return(
+            inputs,
+            output,
+            intermediate_steps,
+            run_manager=run_manager,
+            interaction_type=interaction_type,
+            who=who,
+        )
+
     def arun(
         self,
         *args,
@@ -118,17 +204,12 @@ class ConcurrentAgentExecutor(AgentExecutor):
     ):
         raise NotImplementedError
 
-    def start(self) -> None:
-        self.finished = Event()
-
-        self.queue = PriorityQueue()
-
+    def start(self):
         self.pool = Pool(processes=self.processes)
-
-        self.thread = Thread(target=self._event_loop)
+        self.thread = Thread(target=self._main_thread)
         self.thread.start()
 
-    def stop(self) -> None:
+    def stop(self):
         self.finished.set()
         self.thread.join()
 
@@ -140,19 +221,14 @@ class ConcurrentAgentExecutor(AgentExecutor):
         self.emitter.on("message", func)
         return func
 
-    def _event_loop(self) -> None:
-        while True:
-            _, who, inputs, run_manager = self.queue.get()
-            if self.finished.is_set():
-                break
-            self._handle_call(inputs, who=who, run_manager=run_manager)
-
     def _return(
         self,
         inputs: Dict[str, Any],
         output: AgentFinish,
         intermediate_steps: list,
         run_manager: Optional[CallbackManagerForChainRun] = None,
+        interaction_type: InteractionType = InteractionType.User,
+        who: Optional[str] = None,
     ) -> Dict[str, Any]:
         if run_manager:
             run_manager.on_agent_finish(output, color="green", verbose=self.verbose)
@@ -161,7 +237,16 @@ class ConcurrentAgentExecutor(AgentExecutor):
         if self.return_intermediate_steps:
             final_output["intermediate_steps"] = intermediate_steps
 
-        self.memory.save_context(inputs, final)
+        match interaction_type:
+            case InteractionType.User:
+                self.memory.save_context(inputs, final_output)
+            case InteractionType.Tool:
+                self.memory.chat_memory.add_ai_message(inputs["input"])
+                self.memory.chat_memory.add_ai_message(final_output["output"])
+            case InteractionType.Agent:
+                raise NotImplementedError
+            case _:
+                raise ValueError(f"Unknown interaction type: {interaction_type}")
 
         self.emitter.emit("message", "agent", "message", final_output["output"])
 
@@ -179,7 +264,15 @@ class ConcurrentAgentExecutor(AgentExecutor):
             {"input": f"Tool {tool.name} with job_id {job_id} finished: {output}"}
         )
 
-        self.queue.put((1, f"{tool.name}:{job_id}", inputs, None))
+        self.queue.put(
+            PrioritizedItem(
+                priority=1,
+                interaction_type=InteractionType.Tool,
+                who=f"{tool.name}:{job_id}",
+                inputs=inputs,
+                # run_manager=None,
+            )
+        )
 
     def _tool_error_callback(
         self,
@@ -193,7 +286,15 @@ class ConcurrentAgentExecutor(AgentExecutor):
             {"input": f"Tool {tool.name} with job_id {job_id} failed: {exception}"}
         )
 
-        self.queue.put((1, f"{tool.name}:{job_id}", inputs, None))
+        self.queue.put(
+            PrioritizedItem(
+                priority=1,
+                interaction_type=InteractionType.Tool,
+                who=f"{tool.name}:{job_id}",
+                inputs=inputs,
+                # run_manager=None,
+            )
+        )
 
     def _start_tool(
         self,
@@ -237,18 +338,14 @@ class ConcurrentAgentExecutor(AgentExecutor):
         inputs: Dict[str, str],
         intermediate_steps: List[Tuple[AgentAction, str]],
         run_manager: Optional[CallbackManagerForChainRun] = None,
-        who: str = "agent",
+        interaction_type: InteractionType = InteractionType.User,
     ) -> Union[AgentFinish, List[Tuple[AgentAction, str]]]:
-        """Take a single step in the thought-action-observation loop.
-
-        Override this to take control of how the agent makes and acts on choices.
-        """
         try:
             # Call the LLM to see what to do.
             output = self.agent.plan(
                 intermediate_steps,
                 callbacks=run_manager.get_child() if run_manager else None,
-                who=who,
+                interaction_type=interaction_type,
                 **inputs,
             )
         except OutputParserException as exception:
@@ -336,67 +433,19 @@ class ConcurrentAgentExecutor(AgentExecutor):
             result.append((agent_action, observation))
         return result
 
-    def _handle_call(
-        self,
-        inputs: Dict[str, str],
-        run_manager: Optional[CallbackManagerForChainRun] = None,
-        who: str = "agent",
-    ) -> Dict[str, Any]:
-        """Run text through and get agent response."""
-
-        # Construct a mapping of tool name to tool for easy lookup
-        name_to_tool_map = {tool.name: tool for tool in self.tools}
-        # We construct a mapping from each tool to a color, used for logging.
-        color_mapping = get_color_mapping(
-            [tool.name for tool in self.tools], excluded_colors=["green", "red"]
-        )
-        intermediate_steps: List[Tuple[AgentAction, str]] = []
-        # Let's start tracking the number of iterations and time elapsed
-        iterations = 0
-        time_elapsed = 0.0
-        start_time = time.time()
-        # We now enter the agent loop (until it returns something).
-        while self._should_continue(iterations, time_elapsed):
-            next_step_output = self._take_next_step(
-                name_to_tool_map,
-                color_mapping,
-                inputs,
-                intermediate_steps,
-                run_manager=run_manager,
-                who=who,
-            )
-
-            if isinstance(next_step_output, AgentFinish):
-                return self._return(
-                    inputs,
-                    next_step_output,
-                    intermediate_steps,
-                    run_manager=run_manager,
-                )
-
-            intermediate_steps.extend(next_step_output)
-            if len(next_step_output) == 1:
-                next_step_action = next_step_output[0]
-                # See if tool should return directly
-                tool_return = self._get_tool_return(next_step_action)
-                if tool_return is not None:
-                    return self._return(
-                        inputs, tool_return, intermediate_steps, run_manager=run_manager
-                    )
-            iterations += 1
-            time_elapsed = time.time() - start_time
-        output = self.agent.return_stopped_response(
-            self.early_stopping_method, intermediate_steps, **inputs
-        )
-        return self._return(inputs, output, intermediate_steps, run_manager=run_manager)
-
     def _call(
         self,
         inputs: Dict[str, str],
         run_manager: Optional[CallbackManagerForChainRun] = None,
         priority: int = 0,
-        who: str = "agent",
-    ) -> Dict[str, Any]:
-        """Run text through and get agent response."""
-
-        self.queue.put((priority, who, inputs, run_manager))
+        interaction_type: InteractionType = InteractionType.User,
+    ):
+        self.queue.put(
+            PrioritizedItem(
+                priority=priority,
+                interaction_type=interaction_type,
+                who="user",
+                inputs=inputs,
+                # run_manager=run_manager,
+            )
+        )
