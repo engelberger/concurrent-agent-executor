@@ -41,33 +41,53 @@ from concurrent_agent_executor.models import (
     BaseParallelizableTool,
 )
 
+MessageCallback = Callable[[str, str, dict[str, Any]], None]
+"""f(who: str, type: str, outputs: dict[str, Any]) -> None"""
+
 
 class ConcurrentAgentExecutor(AgentExecutor):
+    """Concurrent agent executor runtime."""
+
     agent: ConcurrentStructuredChatAgent
+    """The agent definition."""
+
     tools: Sequence[Union[BaseParallelizableTool, BaseTool]]
+    """The tools the agent can run/invoke."""
+
     memory: Optional[ConversationBufferMemory] = None
+    """The memory of the agent."""
 
     processes: int = Field(
         default=4,
     )
+    """Size of the process pool."""
+
     emitter: AsyncIOEventEmitter = Field(
         default_factory=lambda: AsyncIOEventEmitter(loop=asyncio.new_event_loop()),
     )
+    """The event emitter. Handles post-generation logic."""
+
     queue: PriorityQueue[Interaction] = Field(
         default_factory=PriorityQueue,
     )
+    """The queue of interactions."""
+
     finished: Event = Field(
         default_factory=Event,
     )
+    """The event that signals the end of the agent."""
 
     thread: Optional[Thread]
-    pool: Optional[Any]
+    """The thread that runs the agent."""
+
+    pool: Optional[Any]  # Optional[Pool]
+    """The process pool."""
 
     def __enter__(self) -> ConcurrentAgentExecutor:
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self, *args, **kwargs) -> None:
         self.stop()
 
     def __call__(
@@ -77,7 +97,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         *,
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    ) -> None:
         inputs = self.prep_inputs(inputs)
         callback_manager = CallbackManager.configure(
             callbacks,
@@ -105,6 +125,8 @@ class ConcurrentAgentExecutor(AgentExecutor):
 
     def _main_thread(self):
         while True:
+            # self.queue.
+
             item = self.queue.get()
             if self.finished.is_set():
                 break
@@ -119,6 +141,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         self,
         inputs: Dict[str, str],
         run_manager: Optional[CallbackManagerForChainRun] = None,
+        *,
         interaction_type: InteractionType = InteractionType.User,
         who: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -182,19 +205,15 @@ class ConcurrentAgentExecutor(AgentExecutor):
             who=who,
         )
 
-    def arun(
-        self,
-        *args,
-        **kwargs,
-    ):
+    def arun(self, *args, **kwargs) -> None:
         raise NotImplementedError
 
-    def start(self):
+    def start(self) -> None:
         self.pool = Pool(processes=self.processes)
         self.thread = Thread(target=self._main_thread)
         self.thread.start()
 
-    def stop(self):
+    def stop(self) -> None:
         self.finished.set()
         self.thread.join()
 
@@ -202,9 +221,12 @@ class ConcurrentAgentExecutor(AgentExecutor):
         self.pool.join()
 
     # NOTE: This is a decorator
-    def on_message(self, func: Callable) -> Callable:
+    def on_message(self, func: MessageCallback) -> MessageCallback:
         self.emitter.on("message", func)
         return func
+
+    def emit_message(self, who: str, type: str, outputs: dict[str, Any]) -> None:
+        self.emitter.emit("message", who, type, outputs)
 
     def _return(
         self,
@@ -212,6 +234,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         output: AgentFinish,
         intermediate_steps: list,
         run_manager: Optional[CallbackManagerForChainRun] = None,
+        *,
         interaction_type: InteractionType = InteractionType.User,
         who: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -233,23 +256,23 @@ class ConcurrentAgentExecutor(AgentExecutor):
             case _:
                 raise ValueError(f"Unknown interaction type: {interaction_type}")
 
-        self.emitter.emit("message", "agent", "message", final_output["output"])
+        self.emit_message("agent", "message", final_output)
 
         return final_output
 
     def _tool_callback(
         self,
-        output: Any,
+        output: str,
         job_id: Optional[str] = None,
         tool: Optional[BaseParallelizableTool] = None,
     ) -> None:
-        self.emitter.emit("message", f"{tool.name}:{job_id}", "finish", output)
+        self.emit_message(f"{tool.name}:{job_id}", "finish", {"output": output})
 
         inputs = self.prep_inputs(
             {"input": f"Tool {tool.name} with job_id {job_id} finished: {output}"}
         )
 
-        self.queue.put(
+        self.queue.put_nowait(
             Interaction(
                 priority=1,
                 interaction_type=InteractionType.Tool,
@@ -265,13 +288,17 @@ class ConcurrentAgentExecutor(AgentExecutor):
         job_id: Optional[str] = None,
         tool: Optional[BaseParallelizableTool] = None,
     ):
-        self.emitter.emit("message", f"{tool.name}:{job_id}", "error", exception)
+        self.emit_message(
+            f"{tool.name}:{job_id}",
+            "error",
+            {"output": f"Tool {tool.name} with job_id {job_id} failed: {exception}"},
+        )
 
         inputs = self.prep_inputs(
             {"input": f"Tool {tool.name} with job_id {job_id} failed: {exception}"}
         )
 
-        self.queue.put(
+        self.queue.put_nowait(
             Interaction(
                 priority=1,
                 interaction_type=InteractionType.Tool,
@@ -310,8 +337,10 @@ class ConcurrentAgentExecutor(AgentExecutor):
             ),
         )
 
-        self.emitter.emit(
-            "message", f"{tool.name}:{agent_action.job_id}", "start", "started"
+        self.emit_message(
+            f"{tool.name}:{agent_action.job_id}",
+            "start",
+            {"output": f"Tool {tool.name} with job_id {agent_action.job_id} started"},
         )
 
         return START_BACKGROUND_JOB.format(
@@ -427,7 +456,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         priority: int = 0,
         interaction_type: InteractionType = InteractionType.User,
     ):
-        self.queue.put(
+        self.queue.put_nowait(
             Interaction(
                 priority=priority,
                 interaction_type=interaction_type,

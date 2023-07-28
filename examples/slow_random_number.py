@@ -11,32 +11,12 @@ from typing import Any
 
 
 from dotenv import load_dotenv
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts import MessagesPlaceholder
-from langchain.memory import ConversationBufferMemory
 
-# pylint: disable=no-name-in-module
-from pydantic import BaseModel, Field
 from colorama import Back, Style
 
-from concurrent_agent_executor import ConcurrentAgentExecutor, BaseParallelizableTool
-from concurrent_agent_executor.tools import WaitTool
-from concurrent_agent_executor.structured_chat import ConcurrentStructuredChatAgent
+from concurrent_agent_executor import initialize, BaseParallelizableTool
 
 load_dotenv()
-
-
-class RandomNumberToolSchema(BaseModel):
-    """Schema for the RandomNumberTool tool."""
-
-    a: int = Field(
-        ...,
-        description="The lower bound of the random number generation (inclusive).",
-    )
-    b: int = Field(
-        ...,
-        description="The upper bound of the random number generation (inclusive).",
-    )
 
 
 class RandomNumberTool(BaseParallelizableTool):
@@ -52,7 +32,6 @@ class RandomNumberTool(BaseParallelizableTool):
         "Schedules a random number generation between a and b; once invoked, you"
         "must wait for the result to be ready. Both a and b are integers."
     )
-    args_schema: RandomNumberToolSchema = RandomNumberToolSchema
 
     # pylint: disable=arguments-differ
     def _run(
@@ -60,13 +39,8 @@ class RandomNumberTool(BaseParallelizableTool):
         a: int,
         b: int,
     ):
-        job_id = self.context.get("job_id", None)
-
-        print(f"Running job {job_id}...")
-
         try:
             time.sleep(10)
-            print(f"Finishing job {job_id}...")
             return f"The random number is: {random.randint(a, b)}"
         # pylint: disable=broad-except
         except Exception as exception:
@@ -79,7 +53,9 @@ class RandomNumberTool(BaseParallelizableTool):
 def main():
     """Main function for the example."""
 
-    def on_message(who: str, message: str):
+    def on_message(who: str, type: str, outputs: dict[str, Any]):
+        message = outputs["output"]
+
         if who.startswith("tool"):
             print(f"\n{Back.YELLOW}{who}{Style.RESET_ALL}: {message}\n")
         elif who.startswith("error"):
@@ -87,46 +63,15 @@ def main():
         else:
             print(f"\n{Back.GREEN}{who}{Style.RESET_ALL}: {message}\n")
 
-    llm = ChatOpenAI(
-        temperature=0.3,
-        model="gpt-4",
+    executor = initialize(
+        tools=[RandomNumberTool()],
     )
 
-    tools = [
-        WaitTool(),
-        RandomNumberTool(),
-    ]
-
-    chat_history = MessagesPlaceholder(variable_name="chat_history")
-    memory = ConversationBufferMemory(
-        memory_key="chat_history", output_key="output", return_messages=True
-    )
-
-    agent = ConcurrentStructuredChatAgent.from_llm_and_tools(
-        llm=llm,
-        tools=tools,
-        memory_prompts=[chat_history],
-        input_variables=["input", "agent_scratchpad", "chat_history"],
-    )
-
-    executor = ConcurrentAgentExecutor.from_agent_and_tools(
-        agent=agent,
-        tools=tools,
-        memory=memory,
-        handle_parsing_errors=True,
-        early_stopping_method="generate",
-        return_intermediate_steps=True,
-    )
-
-    prompt = (
-        'generate a random number between 1 and 2, if it is 1 say "odd", otherwise say "even". '
-        "Both a and b are integers."
-    )
+    prompt = 'generate a random number between 1 and 10, if it is 1 say "odd", otherwise say "even". '
 
     with executor:
         executor.emitter.on("message", on_message)
-        result = executor({"input": prompt})
-        print(f"{result=}")
+        executor({"input": prompt})
 
 
 if __name__ == "__main__":

@@ -1,17 +1,23 @@
 import asyncio
-from typing import Optional
+from typing import Any, Optional
 
 import chainlit
 
 from chainlit.session import sessions_id
 from chainlit.emitter import ChainlitEmitter
 from chainlit.context import loop_var, emitter_var
+from langchain.agents import load_tools
+from langchain.llms import OpenAI
 
 from concurrent_agent_executor import initialize
 from examples.slow_random_number import RandomNumberTool
 
 _LOOP = asyncio.get_event_loop()
-executor = initialize(tools=[RandomNumberTool()], processes=4)
+executor = initialize(
+    tools=[RandomNumberTool(), *load_tools(["llm-math"], llm=OpenAI(temperature=0))],
+    processes=4,
+    model="gpt-4",
+)
 
 task_list: Optional[chainlit.TaskList] = None
 
@@ -35,8 +41,13 @@ def find(
 
 
 @executor.on_message
-def _executor_on_message(who: str, type: str, message: str):
+def _executor_on_message(who: str, type: str, outputs: dict[str, Any]):
     _context_hack()
+
+    message = outputs["output"]
+
+    if "intermediate_steps" in outputs:
+        print(f"{who}: {outputs['intermediate_steps']}")
 
     if who == "agent":
         message = chainlit.Message(
