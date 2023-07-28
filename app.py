@@ -41,7 +41,11 @@ def find(
 
 
 @executor.on_message
-def _executor_on_message(who: str, type: str, outputs: dict[str, Any]):
+def _executor_on_message(
+    who: str, 
+    type: str, 
+    outputs: dict[str, Any]
+):
     _context_hack()
 
     message = outputs["output"]

@@ -16,6 +16,15 @@ class InteractionType(Enum):
     Tool = "tool"
 
 
+class StopMotive(Enum):
+    """The reason an agent stopped."""
+
+    Finished = "finished"
+    """The agent finished its work."""
+    Error = "error"
+    """The agent encountered an error."""
+
+
 @dataclass(order=True)
 class Interaction:
     priority: int

@@ -9,7 +9,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from threading import Thread, Event
 from multiprocessing import Pool
-from queue import PriorityQueue
+from queue import PriorityQueue, Queue, Empty
 
 from pyee import AsyncIOEventEmitter
 from pydantic import Field
@@ -39,10 +39,57 @@ from concurrent_agent_executor.models import (
     InteractionType,
     AgentActionWithId,
     BaseParallelizableTool,
+    StopMotive,
 )
 
 MessageCallback = Callable[[str, str, dict[str, Any]], None]
 """f(who: str, type: str, outputs: dict[str, Any]) -> None"""
+
+
+class RunOnceGenerator:
+    finished: Event
+    queue: Queue[dict[str, Any]]
+    executor: ConcurrentAgentExecutor
+    inputs: dict[str, str]
+
+    def __init__(
+        self,
+        executor: ConcurrentAgentExecutor,
+        inputs: dict[str, str],
+        *,
+        start: bool = True,
+    ) -> None:
+        self.finished = Event()
+        self.queue = Queue()
+        self.executor = executor
+        self.inputs = inputs
+
+        if start:
+            self.start()
+
+    def _on_message(self, who: str, type: str, outputs: Dict[str, Any]) -> None:
+        if who == "agent" and len(self.executor.running_jobs) == 0:
+            self.stop()
+
+        self.queue.put_nowait(outputs)
+
+    def start(self):
+        # self.executor.start()
+        self.executor.on_message(self._on_message)
+        self.executor(self.inputs)
+
+    def stop(self):
+        # self.executor.stop()
+        self.finished.set()
+
+    def __iter__(self) -> "RunOnceGenerator":
+        return self
+
+    def __next__(self):
+        if self.queue.empty() and self.finished.is_set():
+            raise StopIteration
+
+        return self.queue.get()
 
 
 class ConcurrentAgentExecutor(AgentExecutor):
@@ -82,6 +129,11 @@ class ConcurrentAgentExecutor(AgentExecutor):
 
     pool: Optional[Any]  # Optional[Pool]
     """The process pool."""
+
+    running_jobs: set[str] = Field(
+        default_factory=set,
+    )
+    """The running jobs (id)."""
 
     def __enter__(self) -> ConcurrentAgentExecutor:
         self.start()
@@ -124,12 +176,12 @@ class ConcurrentAgentExecutor(AgentExecutor):
             raise e
 
     def _main_thread(self):
-        while True:
-            # self.queue.
+        while not self.finished.is_set():
+            try:
+                item = self.queue.get_nowait()
+            except Empty:
+                continue
 
-            item = self.queue.get()
-            if self.finished.is_set():
-                break
             self._handle_call(
                 item.inputs,
                 interaction_type=item.interaction_type,
@@ -209,8 +261,13 @@ class ConcurrentAgentExecutor(AgentExecutor):
         raise NotImplementedError
 
     def start(self) -> None:
-        self.pool = Pool(processes=self.processes)
-        self.thread = Thread(target=self._main_thread)
+        self.pool = Pool(
+            processes=self.processes,
+        )
+        self.thread = Thread(
+            target=self._main_thread,
+            daemon=True,
+        )
         self.thread.start()
 
     def stop(self) -> None:
@@ -227,6 +284,41 @@ class ConcurrentAgentExecutor(AgentExecutor):
 
     def emit_message(self, who: str, type: str, outputs: dict[str, Any]) -> None:
         self.emitter.emit("message", who, type, outputs)
+
+    def emit_tool_start(
+        self,
+        tool: BaseParallelizableTool,
+        job_id: str,
+        input: Union[str, dict],
+    ) -> None:
+        self.running_jobs.add(job_id)
+        self.emit_message(
+            f"{tool.name}:{job_id}",
+            "start",
+            {"output": f"Tool {tool.name} with job_id {job_id} started"},
+        )
+
+    def emit_tool_stop(
+        self,
+        tool: BaseParallelizableTool,
+        job_id: str,
+        motive: StopMotive,
+        output: str,
+    ) -> None:
+        self.running_jobs.remove(job_id)
+        match motive:
+            case StopMotive.Finished:
+                self.emit_message(f"{tool.name}:{job_id}", "finish", {"output": output})
+            case StopMotive.Error:
+                self.emit_message(
+                    f"{tool.name}:{job_id}",
+                    "error",
+                    {
+                        "output": f"Tool {tool.name} with job_id {job_id} failed: {output}"
+                    },
+                )
+            case _:
+                raise ValueError(f"Unknown stop motive {motive}")
 
     def _return(
         self,
@@ -266,7 +358,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         job_id: Optional[str] = None,
         tool: Optional[BaseParallelizableTool] = None,
     ) -> None:
-        self.emit_message(f"{tool.name}:{job_id}", "finish", {"output": output})
+        self.emit_tool_stop(tool, job_id, StopMotive.Finished, output)
 
         inputs = self.prep_inputs(
             {"input": f"Tool {tool.name} with job_id {job_id} finished: {output}"}
@@ -288,11 +380,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         job_id: Optional[str] = None,
         tool: Optional[BaseParallelizableTool] = None,
     ):
-        self.emit_message(
-            f"{tool.name}:{job_id}",
-            "error",
-            {"output": f"Tool {tool.name} with job_id {job_id} failed: {exception}"},
-        )
+        self.emit_tool_stop(tool, job_id, StopMotive.Error, str(exception))
 
         inputs = self.prep_inputs(
             {"input": f"Tool {tool.name} with job_id {job_id} failed: {exception}"}
@@ -337,10 +425,10 @@ class ConcurrentAgentExecutor(AgentExecutor):
             ),
         )
 
-        self.emit_message(
-            f"{tool.name}:{agent_action.job_id}",
-            "start",
-            {"output": f"Tool {tool.name} with job_id {agent_action.job_id} started"},
+        self.emit_tool_start(
+            tool,
+            agent_action.job_id,
+            agent_action.tool_input,
         )
 
         return START_BACKGROUND_JOB.format(
@@ -453,6 +541,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         self,
         inputs: Dict[str, str],
         run_manager: Optional[CallbackManagerForChainRun] = None,
+        *,
         priority: int = 0,
         interaction_type: InteractionType = InteractionType.User,
     ):
@@ -464,4 +553,13 @@ class ConcurrentAgentExecutor(AgentExecutor):
                 inputs=inputs,
                 # run_manager=run_manager,
             )
+        )
+
+    def run_once(
+        self,
+        inputs: Dict[str, str],
+    ) -> RunOnceGenerator:
+        return RunOnceGenerator(
+            executor=self,
+            inputs=inputs,
         )
