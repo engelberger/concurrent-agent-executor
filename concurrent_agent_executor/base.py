@@ -9,7 +9,7 @@ import time
 
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from threading import Thread, Event
-from multiprocessing import Pool
+from multiprocessing import Pool, Manager
 from queue import PriorityQueue, Queue, Empty
 
 from pyee import AsyncIOEventEmitter
@@ -193,6 +193,12 @@ class ConcurrentAgentExecutor(AgentExecutor):
     thread: Optional[Thread]
     """The thread that runs the agent."""
 
+    manager: Optional[Any]  # Optional[Manager]
+    """The multiprocessing manager."""
+
+    global_context: Optional[Any]  # Optional[dict[str, Any]]
+    """The global context, shared across all processes."""
+
     pool: Optional[Any]  # Optional[Pool]
     """The process pool."""
 
@@ -341,6 +347,8 @@ class ConcurrentAgentExecutor(AgentExecutor):
         raise NotImplementedError
 
     def start(self) -> None:
+        self.manager = Manager()
+        self.global_context = self.manager.dict()
         self.pool = Pool(
             processes=self.processes,
         )
@@ -502,6 +510,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         self.pool.apply_async(
             tool.invoke,
             args=(
+                self.global_context,
                 context,
                 agent_action.tool_input,
             ),
