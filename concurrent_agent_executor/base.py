@@ -42,6 +42,7 @@ from concurrent_agent_executor.models import (
     BaseParallelizableTool,
     StopMotive,
 )
+from concurrent_agent_executor.utils import time_it
 
 MessageCallback = Callable[[str, str, dict[str, Any]], None]
 """f(who: str, type: str, outputs: dict[str, Any]) -> None"""
@@ -60,6 +61,7 @@ class RunOnceGenerator:
     _end_time: Optional[float]
 
     _intermediate_steps: list[Any]
+    _llm_generation_times: list[float]
 
     def __init__(
         self,
@@ -79,8 +81,9 @@ class RunOnceGenerator:
 
         self._start_time = None
         self._end_time = None
-        
+
         self._intermediate_steps = []
+        self._llm_generation_times = []
 
         if self._start:
             self.start()
@@ -88,6 +91,9 @@ class RunOnceGenerator:
     def _on_message(self, who: str, type: str, outputs: Dict[str, Any]) -> None:
         if "intermediate_steps" in outputs:
             self._intermediate_steps.extend(outputs["intermediate_steps"])
+
+        if "llm_generation_time" in outputs:
+            self._llm_generation_times.append(outputs["llm_generation_time"])
 
         if who == "agent" and len(self._executor.running_jobs) == 0:
             self._end_time = time.perf_counter()
@@ -107,6 +113,10 @@ class RunOnceGenerator:
     @property
     def intermediate_steps(self) -> list[Any]:
         return self._intermediate_steps
+
+    @property
+    def llm_generation_time(self) -> float:
+        return sum(self._llm_generation_times)
 
     @property
     def finished(self) -> bool:
@@ -259,24 +269,31 @@ class ConcurrentAgentExecutor(AgentExecutor):
     ) -> Dict[str, Any]:
         # Construct a mapping of tool name to tool for easy lookup
         name_to_tool_map = {tool.name: tool for tool in self.tools}
+
         # We construct a mapping from each tool to a color, used for logging.
         color_mapping = get_color_mapping(
             [tool.name for tool in self.tools], excluded_colors=["green", "red"]
         )
+
         intermediate_steps: List[Tuple[AgentActionWithId, str]] = []
+
         # Let's start tracking the number of iterations and time elapsed
         iterations = 0
         time_elapsed = 0.0
         start_time = time.time()
+
+        llm_generation_time = 0.0
+
         # We now enter the agent loop (until it returns something).
         while self._should_continue(iterations, time_elapsed):
-            next_step_output = self._take_next_step(
-                name_to_tool_map,
-                color_mapping,
+            llm_generation_time, next_step_output = self._take_next_step(
                 inputs,
-                intermediate_steps,
+                name_to_tool_map=name_to_tool_map,
+                color_mapping=color_mapping,
+                intermediate_steps=intermediate_steps,
                 run_manager=run_manager,
                 interaction_type=interaction_type,
+                llm_generation_time=llm_generation_time,
             )
 
             if isinstance(next_step_output, AgentFinish):
@@ -287,6 +304,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
                     run_manager=run_manager,
                     interaction_type=interaction_type,
                     who=who,
+                    llm_generation_time=llm_generation_time,
                 )
 
             intermediate_steps.extend(next_step_output)
@@ -302,6 +320,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
                         run_manager=run_manager,
                         interaction_type=interaction_type,
                         who=who,
+                        llm_generation_time=llm_generation_time,
                     )
             iterations += 1
             time_elapsed = time.time() - start_time
@@ -315,6 +334,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
             run_manager=run_manager,
             interaction_type=interaction_type,
             who=who,
+            llm_generation_time=llm_generation_time,
         )
 
     def arun(self, *args, **kwargs) -> None:
@@ -394,6 +414,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         intermediate_steps: list,
         run_manager: Optional[CallbackManagerForChainRun] = None,
         *,
+        llm_generation_time: float = 0.0,
         interaction_type: InteractionType = InteractionType.User,
         who: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -403,6 +424,9 @@ class ConcurrentAgentExecutor(AgentExecutor):
             )
 
         outputs = agent_finish.return_values
+
+        outputs["llm_generation_time"] = llm_generation_time
+
         if self.return_intermediate_steps:
             outputs["intermediate_steps"] = intermediate_steps
 
@@ -506,20 +530,27 @@ class ConcurrentAgentExecutor(AgentExecutor):
 
     def _take_next_step(
         self,
+        inputs: dict[str, str],
+        *,
         name_to_tool_map: Dict[str, BaseParallelizableTool],
         color_mapping: Dict[str, str],
-        inputs: Dict[str, str],
         intermediate_steps: List[Tuple[AgentActionWithId, str]],
         run_manager: Optional[CallbackManagerForChainRun] = None,
         interaction_type: InteractionType = InteractionType.User,
-    ) -> Union[AgentFinish, List[Tuple[AgentActionWithId, str]]]:
+        llm_generation_time: float = 0.0,
+    ) -> tuple[float, Union[AgentFinish, List[Tuple[AgentActionWithId, str]]]]:
         try:
-            # Call the LLM to see what to do.
-            output = self.agent.plan(
-                intermediate_steps,
-                callbacks=run_manager.get_child() if run_manager else None,
-                interaction_type=interaction_type,
-                **inputs,
+            llm_generation_time, output = time_it(
+                self.agent.plan,
+                args=[
+                    intermediate_steps,
+                ],
+                kwargs={
+                    "callbacks": run_manager.get_child() if run_manager else None,
+                    "interaction_type": interaction_type,
+                    **inputs,
+                },
+                current_time=llm_generation_time,
             )
         except OutputParserException as exception:
             if isinstance(self.handle_parsing_errors, bool):
@@ -554,10 +585,10 @@ class ConcurrentAgentExecutor(AgentExecutor):
                 callbacks=run_manager.get_child() if run_manager else None,
                 **tool_run_kwargs,
             )
-            return [(output, observation)]
+            return llm_generation_time, [(output, observation)]
         # If the tool chosen is the finishing tool, then we end and return.
         if isinstance(output, AgentFinish):
-            return output
+            return llm_generation_time, output
         actions: List[AgentActionWithId]
         if isinstance(output, AgentActionWithId):
             actions = [output]
@@ -604,7 +635,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
                     **tool_run_kwargs,
                 )
             result.append((agent_action, observation))
-        return result
+        return llm_generation_time, result
 
     def _call(
         self,

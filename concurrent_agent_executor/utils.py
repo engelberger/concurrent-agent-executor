@@ -20,10 +20,11 @@ def time_it(
     args: Optional[list[Any]] = None,
     kwargs: Optional[dict[str, Any]] = None,
     *,
-    current_time: float = 0,
+    current_time: float = 0.0,
 ):
     if args is None:
         args = []
+
     if kwargs is None:
         kwargs = {}
 

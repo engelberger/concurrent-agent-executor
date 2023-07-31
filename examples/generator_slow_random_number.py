@@ -32,7 +32,7 @@ class RandomNumberTool(BaseParallelizableTool):
         b: int,
     ):
         try:
-            # time.sleep(10)
+            # time.sleep(5)
             return f"The random number is: {random.randint(a, b)}"
         # pylint: disable=broad-except
         except Exception as exception:
@@ -58,6 +58,7 @@ def main():
         print(outputs)
         print(f"Used {run.intermediate_steps}")
         print(f"Took {run.running_time} seconds")
+        print(f"LLM took {run.llm_generation_time} seconds")
     finally:
         executor.stop()
 
