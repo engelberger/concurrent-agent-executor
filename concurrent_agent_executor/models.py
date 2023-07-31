@@ -46,6 +46,7 @@ class AgentActionWithId:
     """Additional information to log about the action."""
 
     job_id: str = field(default_factory=generate_id)
+    """The human-readable ID of the job that this action is a part of."""
 
 
 class BaseParallelizableTool(BaseTool):
@@ -57,6 +58,7 @@ class BaseParallelizableTool(BaseTool):
         description="Whether this tool can be run in parallel with other tools.",
     )
 
+    global_context: Any
     context: Any
 
     def _set_context(self, **kwargs) -> None:
@@ -69,10 +71,15 @@ class BaseParallelizableTool(BaseTool):
 
     def invoke(
         self,
+        global_context: dict[str, Any],
         context: dict[str, Any],
         *args,
         **kwargs,
     ) -> Any:
         """Invokes the tool."""
+        self.global_context = global_context
         self._set_context(**context)
         return self.run(*args, **kwargs)
+
+    def _arun(self, *args: Any, **kwargs: Any):
+        return self._run(*args, **kwargs)
