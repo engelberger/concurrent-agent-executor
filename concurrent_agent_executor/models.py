@@ -46,6 +46,12 @@ class AgentActionWithId:
     """Additional information to log about the action."""
 
     job_id: str = field(default_factory=generate_id)
+    """The human-readable ID of the job that this action is a part of."""
+
+    intermediate_steps: list[tuple["AgentActionWithId", str]] = field(
+        default_factory=list
+    )
+    """A list of intermediate steps that this action is a part of."""
 
 
 class BaseParallelizableTool(BaseTool):

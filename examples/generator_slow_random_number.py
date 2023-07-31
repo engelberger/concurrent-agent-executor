@@ -53,8 +53,11 @@ def main():
 
     try:
         executor.start()
-        outputs = tail(executor.run_once({"input": prompt}))
-        print(outputs["output"])
+        run = executor.run_once({"input": prompt})
+        outputs = tail(run)
+        print(outputs)
+        print(f"Used {run.intermediate_steps}")
+        print(f"Took {run.running_time} seconds")
     finally:
         executor.stop()
 
