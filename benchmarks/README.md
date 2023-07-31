@@ -30,3 +30,10 @@ Run `{hotpotqa,fever,alfworld,webshop}.ipynb`. As HotpotQA and FEVER have large 
   html = {https://arxiv.org/abs/2210.03629},
 }
 ```
+
+## Comparisons
+
+- running time
+- running time - llm generation time
+- running time; throttling tools
+- running time - llm generation time; throttling tools
