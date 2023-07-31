@@ -82,11 +82,19 @@ class RunOnceGenerator:
         # self.executor.stop()
         self.finished.set()
 
+    def _should_stop(self):
+        return (
+            self.queue.empty()
+            and self.finished.is_set()
+            and self.executor.queue.empty()
+            and not self.executor.busy
+        )
+
     def __iter__(self) -> "RunOnceGenerator":
         return self
 
     def __next__(self):
-        if self.queue.empty() and self.finished.is_set():
+        if self._should_stop():
             raise StopIteration
 
         return self.queue.get()
@@ -118,6 +126,11 @@ class ConcurrentAgentExecutor(AgentExecutor):
         default_factory=PriorityQueue,
     )
     """The queue of interactions."""
+
+    busy: bool = Field(
+        default=False,
+    )
+    """Whether the agent is busy."""
 
     finished: Event = Field(
         default_factory=Event,
@@ -182,12 +195,16 @@ class ConcurrentAgentExecutor(AgentExecutor):
             except Empty:
                 continue
 
+            self.busy = True
+
             self._handle_call(
                 item.inputs,
                 interaction_type=item.interaction_type,
                 who=item.who,
                 # run_manager=item.run_manager,
             )
+
+            self.busy = False
 
     def _handle_call(
         self,

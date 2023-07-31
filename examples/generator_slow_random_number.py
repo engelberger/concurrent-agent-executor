@@ -6,6 +6,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 from concurrent_agent_executor import initialize, BaseParallelizableTool
+from concurrent_agent_executor.utils import tail
 
 load_dotenv()
 
@@ -31,7 +32,7 @@ class RandomNumberTool(BaseParallelizableTool):
         b: int,
     ):
         try:
-            time.sleep(10)
+            # time.sleep(10)
             return f"The random number is: {random.randint(a, b)}"
         # pylint: disable=broad-except
         except Exception as exception:
@@ -52,9 +53,8 @@ def main():
 
     try:
         executor.start()
-        generator = executor.run_once({"input": prompt})
-        for outputs in generator:
-            print(outputs["output"], end="\n\n")
+        outputs = tail(executor.run_once({"input": prompt}))
+        print(outputs["output"])
     finally:
         executor.stop()
 
