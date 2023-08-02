@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Union
+from human_id import generate_id
 
 from pydantic import Field
-from human_id import generate_id
 
 from langchain.tools.base import BaseTool
 
@@ -28,7 +28,6 @@ class StopMotive(Enum):
 @dataclass(order=True)
 class Interaction:
     priority: int
-
     interaction_type: InteractionType = field(compare=False)
     who: str = field(compare=False)
     inputs: dict[str, Any] = field(compare=False)
@@ -45,6 +44,7 @@ class AgentActionWithId:
     log: str
     """Additional information to log about the action."""
 
+    # NOTE: field with factory is disabled as the object would then be not serializable
     job_id: str = field(default_factory=generate_id)
     """The human-readable ID of the job that this action is a part of."""
 

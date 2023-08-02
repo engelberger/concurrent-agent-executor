@@ -47,9 +47,6 @@ def _executor_on_message(who: str, type: str, outputs: dict[str, Any]):
 
     message = outputs["output"]
 
-    # if "intermediate_steps" in outputs:
-    #     print(f"{who}: {outputs['intermediate_steps']}")
-
     if who == "agent":
         message = chainlit.Message(
             author=who,

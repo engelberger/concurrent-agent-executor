@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from threading import Thread, Event
 from multiprocessing import Pool, Manager
 from queue import PriorityQueue, Queue, Empty
+from human_id import generate_id
 
 from pyee import AsyncIOEventEmitter
 from pydantic import Field
@@ -435,8 +436,10 @@ class ConcurrentAgentExecutor(AgentExecutor):
 
         outputs["llm_generation_time"] = llm_generation_time
 
+        # NOTE: This has to be serializable
         if self.return_intermediate_steps:
-            outputs["intermediate_steps"] = intermediate_steps
+            # outputs["intermediate_steps"] = intermediate_steps
+            outputs["intermediate_steps"] = []
 
         match interaction_type:
             case InteractionType.User:
@@ -583,7 +586,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
             else:
                 # pylint: disable=raise-missing-from
                 raise ValueError("Got unexpected type of `handle_parsing_errors`")
-            output = AgentActionWithId("_Exception", observation, text)
+            output = AgentActionWithId("_Exception", observation, text, generate_id())
             if run_manager:
                 run_manager.on_agent_action(output, color="green")
             tool_run_kwargs = self.agent.tool_run_logging_kwargs()
