@@ -3,7 +3,6 @@ import random
 from dotenv import load_dotenv
 
 from concurrent_agent_executor import initialize, BaseParallelizableTool
-from concurrent_agent_executor.utils import tail
 
 load_dotenv()
 
@@ -43,7 +42,7 @@ def main():
     try:
         executor.start()
         run = executor.run_once({"input": prompt})
-        outputs = tail(run)
+        outputs = run.tail()
 
         print(outputs)
         print(f"Used {run.intermediate_steps}")

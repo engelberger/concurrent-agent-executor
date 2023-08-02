@@ -1,18 +1,8 @@
 import time
 
-from typing import Any, Callable, Iterable, Optional, TypeVar
+from typing import Any, Callable, Optional, TypeVar
 
 T = TypeVar("T")
-
-
-def tail(
-    iterable: Iterable[T],
-    default: T = None,
-) -> T:
-    _tail = default
-    for _tail in iterable:
-        pass
-    return _tail
 
 
 def time_it(

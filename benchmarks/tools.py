@@ -13,7 +13,6 @@ import requests
 from bs4 import BeautifulSoup
 
 from concurrent_agent_executor import BaseParallelizableTool, initialize
-from concurrent_agent_executor.utils import tail
 
 
 pp = pprint.PrettyPrinter(indent=2)
@@ -256,8 +255,8 @@ def main():
     try:
         executor.start()
         run = executor.run_once({"input": prompt})
+        outputs = run.tail()
 
-        outputs = tail(run)
         pp.pprint(outputs)
         print(f"Used {run.intermediate_steps}")
         print(f"Took {run.running_time} seconds")

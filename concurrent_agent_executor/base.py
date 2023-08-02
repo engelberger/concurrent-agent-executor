@@ -153,6 +153,12 @@ class RunOnceGenerator:
 
         return self._queue.get()
 
+    def tail(self):
+        _tail = None
+        for _tail in self:
+            pass
+        return _tail
+
 
 class ConcurrentAgentExecutor(AgentExecutor):
     """Concurrent agent executor runtime."""
