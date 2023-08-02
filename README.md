@@ -26,7 +26,9 @@ python examples/slow_random_number.py
 
 Alternatively, you can run the chainlit interface
 
-![Chat-like UI example](assets/example.png)
+![Chat-like UI example 1](assets/example_1.png)
+
+![Chat-like UI example 2](assets/example_2.png)
 
 ## Contributing
 

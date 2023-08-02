@@ -41,11 +41,7 @@ def find(
 
 
 @executor.on_message
-def _executor_on_message(
-    who: str, 
-    type: str, 
-    outputs: dict[str, Any]
-):
+def _executor_on_message(who: str, type: str, outputs: dict[str, Any]):
     _context_hack()
 
     message = outputs["output"]
@@ -56,24 +52,32 @@ def _executor_on_message(
             content=message,
         )
     else:
-        message = chainlit.Message(
-            author=who,
-            content=message,
-            indent=1,
-        )
-
         if type == "start":
+            message = chainlit.Message(
+                author=who,
+                content=message,
+                indent=1,
+            )
+
             task = chainlit.Task(
                 title=who,
                 status=chainlit.TaskStatus.RUNNING,
             )
             chainlit.run_sync(task_list.add_task(task))
-        elif type == "finish":
-            task: chainlit.Task = find(task_list.tasks, lambda t: t.title == who)
-            task.status = chainlit.TaskStatus.DONE
-        elif type == "error":
-            task: chainlit.Task = find(task_list.tasks, lambda t: t.title == who)
-            task.status = chainlit.TaskStatus.FAILED
+        else:
+            message = chainlit.Message(
+                author=who,
+                content=message,
+            )
+
+            if type == "finish":
+                task: chainlit.Task = find(task_list.tasks, lambda t: t.title == who)
+                task.status = chainlit.TaskStatus.DONE
+            elif type == "error":
+                task: chainlit.Task = find(task_list.tasks, lambda t: t.title == who)
+                task.status = chainlit.TaskStatus.FAILED
+            else:
+                raise ValueError(f"Unknown type: {type}")
 
         chainlit.run_sync(task_list.send())
 
