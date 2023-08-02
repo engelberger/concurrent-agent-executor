@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import pprint
 import traceback
 
 from contextlib import contextmanager
@@ -13,6 +14,9 @@ from bs4 import BeautifulSoup
 
 from concurrent_agent_executor import BaseParallelizableTool, initialize
 from concurrent_agent_executor.utils import tail
+
+
+pp = pprint.PrettyPrinter(indent=2)
 
 
 class ParallelizableSearchTool(BaseParallelizableTool):
@@ -244,6 +248,7 @@ def main():
             ParallelizableSearchTool(),
             LookupTool(),
         ],
+        model="gpt-4",
     )
 
     prompt = "Solve a question answering task using the tools you have available: What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?"
@@ -251,11 +256,13 @@ def main():
     try:
         executor.start()
         run = executor.run_once({"input": prompt})
+
         outputs = tail(run)
-        print(outputs)
+        pp.pprint(outputs)
         print(f"Used {run.intermediate_steps}")
         print(f"Took {run.running_time} seconds")
         print(f"LLM took {run.llm_generation_time} seconds")
+        print(f"Tools tool {run.running_time - run.llm_generation_time} seconds")
     finally:
         executor.stop()
 
