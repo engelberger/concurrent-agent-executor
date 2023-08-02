@@ -388,10 +388,15 @@ class ConcurrentAgentExecutor(AgentExecutor):
         input: Union[str, dict],
     ) -> None:
         self.running_jobs.add(job_id)
+
+        outputs = {"output": f"Tool {tool.name} with job_id {job_id} started"}
+
+        self.memory.chat_memory.add_ai_message(outputs["output"])
+
         self.emit_message(
             f"{tool.name}:{job_id}",
             "start",
-            {"output": f"Tool {tool.name} with job_id {job_id} started"},
+            outputs,
         )
 
     def emit_tool_stop(
