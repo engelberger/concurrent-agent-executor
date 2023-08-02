@@ -6,6 +6,7 @@ import json
 import logging
 import re
 from typing import Any, Optional, Union
+from human_id import generate_id
 
 from pydantic import Field
 
@@ -38,7 +39,10 @@ class StructuredChatOutputParser(AgentOutputParser):
                     return AgentFinish({"output": response["action_input"]}, text)
                 else:
                     return AgentActionWithId(
-                        response["action"], response.get("action_input", {}), text
+                        response["action"],
+                        response.get("action_input", {}),
+                        text,
+                        generate_id(),
                     )
             else:
                 return AgentFinish({"output": text}, text)

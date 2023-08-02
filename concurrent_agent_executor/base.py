@@ -1,6 +1,7 @@
 """Agent executor that runs tools in parallel."""
 
 from __future__ import annotations
+from functools import wraps
 
 import inspect
 import asyncio
@@ -8,8 +9,9 @@ import time
 
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from threading import Thread, Event
-from multiprocessing import Pool
+from multiprocessing import Pool, Manager
 from queue import PriorityQueue, Queue, Empty
+from human_id import generate_id
 
 from pyee import AsyncIOEventEmitter
 from pydantic import Field
@@ -41,55 +43,115 @@ from concurrent_agent_executor.models import (
     BaseParallelizableTool,
     StopMotive,
 )
+from concurrent_agent_executor.utils import time_it
 
 MessageCallback = Callable[[str, str, dict[str, Any]], None]
 """f(who: str, type: str, outputs: dict[str, Any]) -> None"""
 
 
 class RunOnceGenerator:
-    finished: Event
-    queue: Queue[dict[str, Any]]
-    executor: ConcurrentAgentExecutor
-    inputs: dict[str, str]
+    _finished: Event
+    _queue: Queue[dict[str, Any]]
+    _executor: ConcurrentAgentExecutor
+    _inputs: dict[str, str]
+
+    _auto_init: bool
+    _start: bool
+
+    _start_time: Optional[float]
+    _end_time: Optional[float]
+
+    _intermediate_steps: list[Any]
+    _llm_generation_times: list[float]
 
     def __init__(
         self,
         executor: ConcurrentAgentExecutor,
         inputs: dict[str, str],
         *,
+        auto_init: bool = False,
         start: bool = True,
     ) -> None:
-        self.finished = Event()
-        self.queue = Queue()
-        self.executor = executor
-        self.inputs = inputs
+        self._finished = Event()
+        self._queue = Queue()
+        self._executor = executor
+        self._inputs = inputs
 
-        if start:
+        self._auto_init = auto_init
+        self._start = start
+
+        self._start_time = None
+        self._end_time = None
+
+        self._intermediate_steps = []
+        self._llm_generation_times = []
+
+        if self._start:
             self.start()
 
     def _on_message(self, who: str, type: str, outputs: Dict[str, Any]) -> None:
-        if who == "agent" and len(self.executor.running_jobs) == 0:
+        if "intermediate_steps" in outputs:
+            self._intermediate_steps.extend(outputs["intermediate_steps"])
+
+        if "llm_generation_time" in outputs:
+            self._llm_generation_times.append(outputs["llm_generation_time"])
+
+        if who == "agent" and len(self._executor.running_jobs) == 0:
+            self._end_time = time.perf_counter()
             self.stop()
 
-        self.queue.put_nowait(outputs)
+        self._queue.put_nowait(outputs)
+
+    @property
+    def running_time(self) -> float:
+        if self._start_time is None:
+            return 0
+        elif self._end_time is None:
+            return time.perf_counter() - self._start_time
+        else:
+            return self._end_time - self._start_time
+
+    @property
+    def intermediate_steps(self) -> list[Any]:
+        return self._intermediate_steps
+
+    @property
+    def llm_generation_time(self) -> float:
+        return sum(self._llm_generation_times)
+
+    @property
+    def finished(self) -> bool:
+        return self._should_stop()
 
     def start(self):
-        # self.executor.start()
-        self.executor.on_message(self._on_message)
-        self.executor(self.inputs)
+        if self._auto_init:
+            self._executor.start()
+        self._executor.on_message(self._on_message)
+
+        self._start_time = time.perf_counter()
+        self._executor(self._inputs)
 
     def stop(self):
-        # self.executor.stop()
-        self.finished.set()
+        if self._auto_init:
+            self._executor.stop()
+        self._finished.set()
+
+    def _should_stop(self):
+        return (
+            self._queue.empty()
+            and self._finished.is_set()
+            and self._executor.queue.empty()
+            and not self._executor.busy
+        )
 
     def __iter__(self) -> "RunOnceGenerator":
         return self
 
     def __next__(self):
-        if self.queue.empty() and self.finished.is_set():
+        if self._should_stop():
             raise StopIteration
 
-        return self.queue.get()
+        return self._queue.get()
 
 
 class ConcurrentAgentExecutor(AgentExecutor):
@@ -119,6 +181,11 @@ class ConcurrentAgentExecutor(AgentExecutor):
     )
     """The queue of interactions."""
 
+    busy: bool = Field(
+        default=False,
+    )
+    """Whether the agent is busy."""
+
     finished: Event = Field(
         default_factory=Event,
     )
@@ -126,6 +193,12 @@ class ConcurrentAgentExecutor(AgentExecutor):
 
     thread: Optional[Thread]
     """The thread that runs the agent."""
+
+    manager: Optional[Any]  # Optional[Manager]
+    """The multiprocessing manager."""
+
+    global_context: Optional[Any]  # Optional[dict[str, Any]]
+    """The global context, shared across all processes."""
 
     pool: Optional[Any]  # Optional[Pool]
     """The process pool."""
@@ -182,6 +255,8 @@ class ConcurrentAgentExecutor(AgentExecutor):
             except Empty:
                 continue
 
+            self.busy = True
+
             self._handle_call(
                 item.inputs,
                 interaction_type=item.interaction_type,
@@ -189,9 +264,11 @@ class ConcurrentAgentExecutor(AgentExecutor):
                 # run_manager=item.run_manager,
             )
 
+            self.busy = False
+
     def _handle_call(
         self,
-        inputs: Dict[str, str],
+        inputs: dict[str, str],
         run_manager: Optional[CallbackManagerForChainRun] = None,
         *,
         interaction_type: InteractionType = InteractionType.User,
@@ -199,24 +276,31 @@ class ConcurrentAgentExecutor(AgentExecutor):
     ) -> Dict[str, Any]:
         # Construct a mapping of tool name to tool for easy lookup
         name_to_tool_map = {tool.name: tool for tool in self.tools}
+
         # We construct a mapping from each tool to a color, used for logging.
         color_mapping = get_color_mapping(
             [tool.name for tool in self.tools], excluded_colors=["green", "red"]
         )
+
         intermediate_steps: List[Tuple[AgentActionWithId, str]] = []
+
         # Let's start tracking the number of iterations and time elapsed
         iterations = 0
         time_elapsed = 0.0
         start_time = time.time()
+
+        llm_generation_time = 0.0
+
         # We now enter the agent loop (until it returns something).
         while self._should_continue(iterations, time_elapsed):
-            next_step_output = self._take_next_step(
-                name_to_tool_map,
-                color_mapping,
+            llm_generation_time, next_step_output = self._take_next_step(
                 inputs,
-                intermediate_steps,
+                name_to_tool_map=name_to_tool_map,
+                color_mapping=color_mapping,
+                intermediate_steps=intermediate_steps,
                 run_manager=run_manager,
                 interaction_type=interaction_type,
+                llm_generation_time=llm_generation_time,
             )
 
             if isinstance(next_step_output, AgentFinish):
@@ -227,6 +311,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
                     run_manager=run_manager,
                     interaction_type=interaction_type,
                     who=who,
+                    llm_generation_time=llm_generation_time,
                 )
 
             intermediate_steps.extend(next_step_output)
@@ -242,6 +327,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
                         run_manager=run_manager,
                         interaction_type=interaction_type,
                         who=who,
+                        llm_generation_time=llm_generation_time,
                     )
             iterations += 1
             time_elapsed = time.time() - start_time
@@ -255,12 +341,15 @@ class ConcurrentAgentExecutor(AgentExecutor):
             run_manager=run_manager,
             interaction_type=interaction_type,
             who=who,
+            llm_generation_time=llm_generation_time,
         )
 
     def arun(self, *args, **kwargs) -> None:
         raise NotImplementedError
 
     def start(self) -> None:
+        self.manager = Manager()
+        self.global_context = self.manager.dict()
         self.pool = Pool(
             processes=self.processes,
         )
@@ -277,10 +366,17 @@ class ConcurrentAgentExecutor(AgentExecutor):
         self.pool.close()
         self.pool.join()
 
+    def reset(self) -> None:
+        pass
+
     # NOTE: This is a decorator
     def on_message(self, func: MessageCallback) -> MessageCallback:
-        self.emitter.on("message", func)
-        return func
+        @wraps(func)
+        def inner(*args, **kwargs):
+            return func(*args, **kwargs)
+
+        self.emitter.on("message", inner)
+        return inner
 
     def emit_message(self, who: str, type: str, outputs: dict[str, Any]) -> None:
         self.emitter.emit("message", who, type, outputs)
@@ -323,34 +419,42 @@ class ConcurrentAgentExecutor(AgentExecutor):
     def _return(
         self,
         inputs: Dict[str, Any],
-        output: AgentFinish,
+        agent_finish: AgentFinish,
         intermediate_steps: list,
         run_manager: Optional[CallbackManagerForChainRun] = None,
         *,
+        llm_generation_time: float = 0.0,
         interaction_type: InteractionType = InteractionType.User,
         who: Optional[str] = None,
     ) -> Dict[str, Any]:
         if run_manager:
-            run_manager.on_agent_finish(output, color="green", verbose=self.verbose)
+            run_manager.on_agent_finish(
+                agent_finish, color="green", verbose=self.verbose
+            )
 
-        final_output = output.return_values
+        outputs = agent_finish.return_values
+
+        outputs["llm_generation_time"] = llm_generation_time
+
+        # NOTE: This has to be serializable
         if self.return_intermediate_steps:
-            final_output["intermediate_steps"] = intermediate_steps
+            # outputs["intermediate_steps"] = intermediate_steps
+            outputs["intermediate_steps"] = []
 
         match interaction_type:
             case InteractionType.User:
-                self.memory.save_context(inputs, final_output)
+                self.memory.save_context(inputs, outputs)
             case InteractionType.Tool:
                 self.memory.chat_memory.add_ai_message(inputs["input"])
-                self.memory.chat_memory.add_ai_message(final_output["output"])
+                self.memory.chat_memory.add_ai_message(outputs["output"])
             case InteractionType.Agent:
                 raise NotImplementedError
             case _:
                 raise ValueError(f"Unknown interaction type: {interaction_type}")
 
-        self.emit_message("agent", "message", final_output)
+        self.emit_message("agent", "message", outputs)
 
-        return final_output
+        return outputs
 
     def _tool_callback(
         self,
@@ -409,6 +513,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
         self.pool.apply_async(
             tool.invoke,
             args=(
+                self.global_context,
                 context,
                 agent_action.tool_input,
             ),
@@ -437,20 +542,27 @@ class ConcurrentAgentExecutor(AgentExecutor):
 
     def _take_next_step(
         self,
+        inputs: dict[str, str],
+        *,
         name_to_tool_map: Dict[str, BaseParallelizableTool],
         color_mapping: Dict[str, str],
-        inputs: Dict[str, str],
         intermediate_steps: List[Tuple[AgentActionWithId, str]],
         run_manager: Optional[CallbackManagerForChainRun] = None,
         interaction_type: InteractionType = InteractionType.User,
-    ) -> Union[AgentFinish, List[Tuple[AgentActionWithId, str]]]:
+        llm_generation_time: float = 0.0,
+    ) -> tuple[float, Union[AgentFinish, List[Tuple[AgentActionWithId, str]]]]:
         try:
-            # Call the LLM to see what to do.
-            output = self.agent.plan(
-                intermediate_steps,
-                callbacks=run_manager.get_child() if run_manager else None,
-                interaction_type=interaction_type,
-                **inputs,
+            llm_generation_time, output = time_it(
+                self.agent.plan,
+                args=[
+                    intermediate_steps,
+                ],
+                kwargs={
+                    "callbacks": run_manager.get_child() if run_manager else None,
+                    "interaction_type": interaction_type,
+                    **inputs,
+                },
+                current_time=llm_generation_time,
             )
         except OutputParserException as exception:
             if isinstance(self.handle_parsing_errors, bool):
@@ -474,7 +586,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
             else:
                 # pylint: disable=raise-missing-from
                 raise ValueError("Got unexpected type of `handle_parsing_errors`")
-            output = AgentActionWithId("_Exception", observation, text)
+            output = AgentActionWithId("_Exception", observation, text, generate_id())
             if run_manager:
                 run_manager.on_agent_action(output, color="green")
             tool_run_kwargs = self.agent.tool_run_logging_kwargs()
@@ -485,10 +597,10 @@ class ConcurrentAgentExecutor(AgentExecutor):
                 callbacks=run_manager.get_child() if run_manager else None,
                 **tool_run_kwargs,
             )
-            return [(output, observation)]
+            return llm_generation_time, [(output, observation)]
         # If the tool chosen is the finishing tool, then we end and return.
         if isinstance(output, AgentFinish):
-            return output
+            return llm_generation_time, output
         actions: List[AgentActionWithId]
         if isinstance(output, AgentActionWithId):
             actions = [output]
@@ -535,7 +647,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
                     **tool_run_kwargs,
                 )
             result.append((agent_action, observation))
-        return result
+        return llm_generation_time, result
 
     def _call(
         self,
