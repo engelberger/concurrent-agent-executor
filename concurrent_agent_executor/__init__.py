@@ -30,7 +30,7 @@ def initialize(
     tools: Sequence[Union[BaseParallelizableTool, BaseTool]],
     model: str = DEFAULT_MODEL,
     **executor_kwargs,
-):
+) -> ConcurrentAgentExecutor:
     """
     Initialize the concurrent_agent_executor module.
     """

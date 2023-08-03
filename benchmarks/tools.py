@@ -138,6 +138,9 @@ class ParallelizableSearchTool(BaseParallelizableTool):
         return observation
 
     def _run(self, entity: str) -> str:
+        if type(entity) is dict:
+            entity = entity["title"]
+
         try:
             return self._run_inner(entity)
         except Exception as e:
@@ -149,6 +152,8 @@ class LookupTool(BaseParallelizableTool):
     name = "lookup"
     description = "Lookup a keyword in the current Wikipedia page."
     is_parallelizable = True
+
+    entity: Optional[str] = None
 
     @property
     def result_titles(self) -> list:
@@ -216,7 +221,7 @@ class LookupTool(BaseParallelizableTool):
     def _run_inner(self, keyword: str) -> str:
         observation = ""
 
-        with self._context(keyword):
+        with self._context():
             if self.lookup_keyword != keyword:  # reset lookup
                 self.set_lookup_keyword(keyword)
                 self.set_lookup_list(self.construct_lookup_list(keyword))
@@ -234,6 +239,9 @@ class LookupTool(BaseParallelizableTool):
         return observation
 
     def _run(self, keyword: str) -> str:
+        if type(keyword) is dict:
+            keyword = keyword["title"]
+
         try:
             return self._run_inner(keyword)
         except Exception as e:

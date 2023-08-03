@@ -454,9 +454,12 @@ class ConcurrentAgentExecutor(AgentExecutor):
 
         match interaction_type:
             case InteractionType.User:
-                self.memory.save_context(inputs, outputs)
+                self.memory.chat_memory.add_user_message(inputs["input"])
+
+                self.memory.chat_memory.add_ai_message(outputs["output"])
             case InteractionType.Tool:
                 self.memory.chat_memory.add_ai_message(inputs["input"])
+
                 self.memory.chat_memory.add_ai_message(outputs["output"])
             case InteractionType.Agent:
                 raise NotImplementedError
