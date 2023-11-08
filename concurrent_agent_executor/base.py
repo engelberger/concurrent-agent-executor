@@ -6,6 +6,9 @@ from functools import wraps
 import inspect
 import asyncio
 import time
+import os
+import logging
+from datetime import datetime
 
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from threading import Thread, Event
@@ -44,6 +47,26 @@ from concurrent_agent_executor.models import (
     StopMotive,
 )
 from concurrent_agent_executor.utils import time_it
+
+import asyncio
+import time
+import logging
+from datetime import datetime
+from threading import Thread, Event
+from multiprocessing import Pool, Manager
+from queue import PriorityQueue, Queue, Empty
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from pyee import AsyncIOEventEmitter
+from pydantic import Field
+from langchain.agents.agent import AgentExecutor, ExceptionTool, InvalidTool, AgentFinish
+from langchain.callbacks.manager import CallbackManager, CallbackManagerForChainRun, Callbacks
+from langchain.schema import Interaction, InteractionType, AgentActionWithId
+from langchain.memory import ConversationBufferMemory
+from langchain.tools import BaseTool
+from concurrent_agent_executor.models import BaseParallelizableTool
+from concurrent_agent_executor.structured_chat.base import ConcurrentStructuredChatAgent
+import logging
+from datetime import datetime
 
 MessageCallback = Callable[[str, str, dict[str, Any]], None]
 """f(who: str, type: str, outputs: dict[str, Any]) -> None"""
@@ -209,8 +232,59 @@ class ConcurrentAgentExecutor(AgentExecutor):
     """The running jobs (id)."""
 
     def __enter__(self) -> ConcurrentAgentExecutor:
+        self.start_logging()
         self.start()
         return self
+
+    def start_logging(self) -> None:
+        """
+        Initialize logging to a file with the current date and time.
+        """
+        log_filename = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "_agent_log.txt"
+        log_filepath = os.path.join(os.getcwd(), log_filename)
+
+        # Set up logging to the file
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            handlers=[
+                logging.FileHandler(log_filepath),
+                logging.StreamHandler()
+            ]
+        )
+
+        # Log the start of the agent
+        logging.info("Agent started")
+    def stop(self) -> None:
+        # Log the stop event before actually stopping the agent
+        logging.info("Agent stopped")
+        super().stop()
+
+    def _on_message(self, who: str, type: str, outputs: Dict[str, Any]) -> None:
+        # Log the message event
+        logging.info(f"Message from {who}: {outputs}")
+        super()._on_message(who, type, outputs)
+
+    def emit_tool_start(
+        self,
+        tool: BaseParallelizableTool,
+        job_id: str,
+        input: Union[str, dict],
+    ) -> None:
+        # Log the tool start event
+        logging.info(f"Tool {tool.name} with job_id {job_id} started")
+        super().emit_tool_start(tool, job_id, input)
+
+    def emit_tool_stop(
+        self,
+        tool: BaseParallelizableTool,
+        job_id: str,
+        motive: StopMotive,
+        output: str,
+    ) -> None:
+        # Log the tool stop event
+        logging.info(f"Tool {tool.name} with job_id {job_id} stopped with motive {motive}")
+        super().emit_tool_stop(tool, job_id, motive, output)
 
     def __exit__(self, *args, **kwargs) -> None:
         self.stop()
