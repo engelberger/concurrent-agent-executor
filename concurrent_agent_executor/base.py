@@ -60,7 +60,7 @@ from pyee import AsyncIOEventEmitter
 from pydantic import Field
 from langchain.agents.agent import AgentExecutor, ExceptionTool, InvalidTool, AgentFinish
 from langchain.callbacks.manager import CallbackManager, CallbackManagerForChainRun, Callbacks
-from langchain.schema import Interaction, InteractionType, AgentActionWithId
+#from langchain.schema import Interaction, InteractionType, AgentActionWithId
 from langchain.memory import ConversationBufferMemory
 from langchain.tools import BaseTool
 from concurrent_agent_executor.models import BaseParallelizableTool
