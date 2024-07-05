@@ -247,37 +247,3 @@ class ConcurrentStructuredChatAgent(Agent):
         except Exception as e:
             logger.error(f"Error in plan: {e}", exc_info=True)
             raise
-
-    def old_plan(
-        self,
-        intermediate_steps: List[Tuple[AgentAction, str]],
-        callbacks: Callbacks = None,
-        interaction_type: InteractionType = InteractionType.User,
-        **kwargs: Any,
-    ) -> Union[AgentAction, AgentFinish]:
-        """Given input, decided what to do.
-
-        Args:
-            intermediate_steps: Steps the LLM has taken to date,
-                along with observations
-            callbacks: Callbacks to run.
-            **kwargs: User inputs.
-
-        Returns:
-            Action specifying what tool to use.
-        """
-        full_inputs = self.get_full_inputs(intermediate_steps, **kwargs)
-
-        match interaction_type:
-            case InteractionType.User:
-                full_output = self.llm_chain.predict(callbacks=callbacks, **full_inputs)
-            case InteractionType.Tool:
-                full_output = self.system_llm_chain.predict(
-                    callbacks=callbacks, **full_inputs
-                )
-            case InteractionType.Agent:
-                raise NotImplementedError
-            case _:
-                raise ValueError(f"Unknown interaction type: {interaction_type}")
-
-        return self.output_parser.parse(full_output)
