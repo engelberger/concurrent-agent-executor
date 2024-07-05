@@ -68,6 +68,11 @@ from concurrent_agent_executor.structured_chat.base import ConcurrentStructuredC
 import logging
 from datetime import datetime
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(processName)s - %(threadName)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
 MessageCallback = Callable[[str, str, dict[str, Any]], None]
 """f(who: str, type: str, outputs: dict[str, Any]) -> None"""
 
@@ -179,6 +184,11 @@ class RunOnceGenerator:
 
 class ConcurrentAgentExecutor(AgentExecutor):
     """Concurrent agent executor runtime."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.iteration_count = 0
+        self.max_iterations = 1000  # Set a reasonable maximum
+        self.start_time = time.time()
 
     agent: ConcurrentStructuredChatAgent
     """The agent definition."""
@@ -322,7 +332,8 @@ class ConcurrentAgentExecutor(AgentExecutor):
             run_manager.on_chain_error(e)
             raise e
 
-    def _main_thread(self):
+    # NOTE: Old logging attempt
+    def old_main_thread(self):
         while not self.finished.is_set():
             try:
                 item = self.queue.get_nowait()
@@ -340,7 +351,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
 
             self.busy = False
 
-    def _handle_call(
+    def old_handle_call(
         self,
         inputs: dict[str, str],
         run_manager: Optional[CallbackManagerForChainRun] = None,
@@ -418,208 +429,7 @@ class ConcurrentAgentExecutor(AgentExecutor):
             llm_generation_time=llm_generation_time,
         )
 
-    def arun(self, *args, **kwargs) -> None:
-        raise NotImplementedError
-
-    def start(self) -> None:
-        self.manager = Manager()
-        self.global_context = self.manager.dict()
-        self.pool = Pool(
-            processes=self.processes,
-        )
-        self.thread = Thread(
-            target=self._main_thread,
-            daemon=True,
-        )
-        self.thread.start()
-
-    def stop(self) -> None:
-        self.finished.set()
-        self.thread.join()
-
-        self.pool.close()
-        self.pool.join()
-
-    def reset(self) -> None:
-        pass
-
-    # NOTE: This is a decorator
-    def on_message(self, func: MessageCallback) -> MessageCallback:
-        @wraps(func)
-        def inner(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        self.emitter.on("message", inner)
-        return inner
-
-    def emit_message(self, who: str, type: str, outputs: dict[str, Any]) -> None:
-        self.emitter.emit("message", who, type, outputs)
-
-    def emit_tool_start(
-        self,
-        tool: BaseParallelizableTool,
-        job_id: str,
-        input: Union[str, dict],
-    ) -> None:
-        self.running_jobs.add(job_id)
-
-        outputs = {"output": f"Tool {tool.name} with job_id {job_id} started"}
-
-        self.memory.chat_memory.add_ai_message(outputs["output"])
-
-        self.emit_message(
-            f"{tool.name}:{job_id}",
-            "start",
-            outputs,
-        )
-
-    def emit_tool_stop(
-        self,
-        tool: BaseParallelizableTool,
-        job_id: str,
-        motive: StopMotive,
-        output: str,
-    ) -> None:
-        self.running_jobs.remove(job_id)
-        match motive:
-            case StopMotive.Finished:
-                self.emit_message(f"{tool.name}:{job_id}", "finish", {"output": output})
-            case StopMotive.Error:
-                self.emit_message(
-                    f"{tool.name}:{job_id}",
-                    "error",
-                    {
-                        "output": f"Tool {tool.name} with job_id {job_id} failed: {output}"
-                    },
-                )
-            case _:
-                raise ValueError(f"Unknown stop motive {motive}")
-
-    def _return(
-        self,
-        inputs: Dict[str, Any],
-        agent_finish: AgentFinish,
-        intermediate_steps: list,
-        run_manager: Optional[CallbackManagerForChainRun] = None,
-        *,
-        llm_generation_time: float = 0.0,
-        interaction_type: InteractionType = InteractionType.User,
-        who: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        if run_manager:
-            run_manager.on_agent_finish(
-                agent_finish, color="green", verbose=self.verbose
-            )
-
-        outputs = agent_finish.return_values
-
-        outputs["llm_generation_time"] = llm_generation_time
-
-        # NOTE: This has to be serializable
-        if self.return_intermediate_steps:
-            # outputs["intermediate_steps"] = intermediate_steps
-            outputs["intermediate_steps"] = []
-
-        match interaction_type:
-            case InteractionType.User:
-                self.memory.save_context(inputs, outputs)
-            case InteractionType.Tool:
-                self.memory.chat_memory.add_ai_message(inputs["input"])
-                self.memory.chat_memory.add_ai_message(outputs["output"])
-            case InteractionType.Agent:
-                raise NotImplementedError
-            case _:
-                raise ValueError(f"Unknown interaction type: {interaction_type}")
-
-        self.emit_message("agent", "message", outputs)
-
-        return outputs
-
-    def _tool_callback(
-        self,
-        output: str,
-        job_id: Optional[str] = None,
-        tool: Optional[BaseParallelizableTool] = None,
-    ) -> None:
-        self.emit_tool_stop(tool, job_id, StopMotive.Finished, output)
-
-        inputs = self.prep_inputs(
-            {"input": f"Tool {tool.name} with job_id {job_id} finished: {output}"}
-        )
-
-        self.queue.put_nowait(
-            Interaction(
-                priority=1,
-                interaction_type=InteractionType.Tool,
-                who=f"{tool.name}:{job_id}",
-                inputs=inputs,
-                # run_manager=None,
-            )
-        )
-
-    def _tool_error_callback(
-        self,
-        exception: Any,
-        job_id: Optional[str] = None,
-        tool: Optional[BaseParallelizableTool] = None,
-    ):
-        self.emit_tool_stop(tool, job_id, StopMotive.Error, str(exception))
-
-        inputs = self.prep_inputs(
-            {"input": f"Tool {tool.name} with job_id {job_id} failed: {exception}"}
-        )
-
-        self.queue.put_nowait(
-            Interaction(
-                priority=1,
-                interaction_type=InteractionType.Tool,
-                who=f"{tool.name}:{job_id}",
-                inputs=inputs,
-                # run_manager=None,
-            )
-        )
-
-    def _start_tool(
-        self,
-        tool: BaseParallelizableTool,
-        agent_action: AgentActionWithId,
-        **tool_run_kwargs,
-    ) -> Any:
-        context = {
-            "job_id": agent_action.job_id,
-        }
-
-        self.pool.apply_async(
-            tool.invoke,
-            args=(
-                self.global_context,
-                context,
-                agent_action.tool_input,
-            ),
-            kwds=tool_run_kwargs,
-            callback=lambda _: self._tool_callback(
-                _,
-                job_id=agent_action.job_id,
-                tool=tool,
-            ),
-            error_callback=lambda _: self._tool_error_callback(
-                _,
-                job_id=agent_action.job_id,
-                tool=tool,
-            ),
-        )
-
-        self.emit_tool_start(
-            tool,
-            agent_action.job_id,
-            agent_action.tool_input,
-        )
-
-        return START_BACKGROUND_JOB.format(
-            tool_name=tool.name, job_id=agent_action.job_id
-        )
-
-    def _take_next_step(
+    def old_take_next_step(
         self,
         inputs: dict[str, str],
         *,
@@ -727,6 +537,339 @@ class ConcurrentAgentExecutor(AgentExecutor):
                 )
             result.append((agent_action, observation))
         return llm_generation_time, result
+
+    def old_return(
+        self,
+        inputs: Dict[str, Any],
+        agent_finish: AgentFinish,
+        intermediate_steps: list,
+        run_manager: Optional[CallbackManagerForChainRun] = None,
+        *,
+        llm_generation_time: float = 0.0,
+        interaction_type: InteractionType = InteractionType.User,
+        who: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if run_manager:
+            run_manager.on_agent_finish(
+                agent_finish, color="green", verbose=self.verbose
+            )
+
+        outputs = agent_finish.return_values
+
+        outputs["llm_generation_time"] = llm_generation_time
+
+        # NOTE: This has to be serializable
+        if self.return_intermediate_steps:
+            # outputs["intermediate_steps"] = intermediate_steps
+            outputs["intermediate_steps"] = []
+
+        match interaction_type:
+            case InteractionType.User:
+                self.memory.save_context(inputs, outputs)
+            case InteractionType.Tool:
+                self.memory.chat_memory.add_ai_message(inputs["input"])
+                self.memory.chat_memory.add_ai_message(outputs["output"])
+            case InteractionType.Agent:
+                raise NotImplementedError
+            case _:
+                raise ValueError(f"Unknown interaction type: {interaction_type}")
+
+        self.emit_message("agent", "message", outputs)
+
+        return outputs
+
+    def old_tool_callback(
+        self,
+        output: str,
+        job_id: Optional[str] = None,
+        tool: Optional[BaseParallelizableTool] = None,
+    ) -> None:
+        self.emit_tool_stop(tool, job_id, StopMotive.Finished, output)
+
+        inputs = self.prep_inputs(
+            {"input": f"Tool {tool.name} with job_id {job_id} finished: {output}"}
+        )
+
+        self.queue.put_nowait(
+            Interaction(
+                priority=1,
+                interaction_type=InteractionType.Tool,
+                who=f"{tool.name}:{job_id}",
+                inputs=inputs,
+                # run_manager=None,
+            )
+        )
+    
+    def old_tool_error_callback(
+        self,
+        exception: Any,
+        job_id: Optional[str] = None,
+        tool: Optional[BaseParallelizableTool] = None,
+    ):
+        self.emit_tool_stop(tool, job_id, StopMotive.Error, str(exception))
+
+        inputs = self.prep_inputs(
+            {"input": f"Tool {tool.name} with job_id {job_id} failed: {exception}"}
+        )
+
+        self.queue.put_nowait(
+            Interaction(
+                priority=1,
+                interaction_type=InteractionType.Tool,
+                who=f"{tool.name}:{job_id}",
+                inputs=inputs,
+                # run_manager=None,
+            )
+        )
+
+    #! new logging attempt
+
+    def _main_thread(self):
+        logger.info("Starting main thread")
+        while not self.finished.is_set():
+            try:
+                item = self.queue.get_nowait()
+                logger.debug(f"Got item from queue: {item}")
+            except Empty:
+                continue
+
+            self.busy = True
+            logger.info(f"Processing item: {item}")
+
+            self._handle_call(
+                item.inputs,
+                interaction_type=item.interaction_type,
+                who=item.who,
+            )
+
+            self.busy = False
+            logger.info(f"Finished processing item: {item}")
+
+        logger.info("Main thread finished")
+
+    def _handle_call(self, inputs, run_manager=None, *, interaction_type=InteractionType.User, who=None):
+        logger.info(f"Handling call: interaction_type={interaction_type}, who={who}")
+        name_to_tool_map = {tool.name: tool for tool in self.tools}
+        color_mapping = get_color_mapping([tool.name for tool in self.tools], excluded_colors=["green", "red"])
+
+        intermediate_steps = []
+        iterations = 0
+        start_time = time.time()
+
+        while self._should_continue(iterations, time.time() - start_time):
+            logger.debug(f"Iteration {iterations}")
+            self.iteration_count += 1
+            if self.iteration_count > self.max_iterations:
+                logger.warning(f"Reached maximum iteration count of {self.max_iterations}")
+                break
+
+            next_step_output = self._take_next_step(
+                inputs,
+                name_to_tool_map=name_to_tool_map,
+                color_mapping=color_mapping,
+                intermediate_steps=intermediate_steps,
+                run_manager=run_manager,
+                interaction_type=interaction_type,
+            )
+
+            if isinstance(next_step_output, AgentFinish):
+                logger.info("Agent finished")
+                return self._return(inputs, next_step_output, intermediate_steps, run_manager=run_manager, interaction_type=interaction_type, who=who)
+
+            intermediate_steps.extend(next_step_output)
+            iterations += 1
+
+        logger.warning("Agent stopped due to iteration limit or time constraint")
+        output = self.agent.return_stopped_response(self.early_stopping_method, intermediate_steps, **inputs)
+        return self._return(inputs, output, intermediate_steps, run_manager=run_manager, interaction_type=interaction_type, who=who)
+
+    def _take_next_step(self, inputs, **kwargs):
+        logger.debug("Taking next step")
+        try:
+            output = self.agent.plan(intermediate_steps=kwargs.get('intermediate_steps', []), callbacks=kwargs.get('run_manager', None), interaction_type=kwargs.get('interaction_type', InteractionType.User), **inputs)
+            logger.debug(f"Agent plan output: {output}")
+            return output
+        except Exception as e:
+            logger.error(f"Error in _take_next_step: {e}", exc_info=True)
+            raise
+
+    def _return(self, inputs, agent_finish, intermediate_steps, run_manager=None, *, interaction_type=InteractionType.User, who=None):
+        logger.info(f"Returning result: interaction_type={interaction_type}, who={who}")
+        if run_manager:
+            run_manager.on_agent_finish(agent_finish, color="green", verbose=self.verbose)
+
+        outputs = agent_finish.return_values
+
+        if self.return_intermediate_steps:
+            outputs["intermediate_steps"] = []
+
+        match interaction_type:
+            case InteractionType.User:
+                self.memory.save_context(inputs, outputs)
+            case InteractionType.Tool:
+                self.memory.chat_memory.add_ai_message(inputs["input"])
+                self.memory.chat_memory.add_ai_message(outputs["output"])
+            case InteractionType.Agent:
+                logger.warning("InteractionType.Agent not implemented")
+            case _:
+                logger.error(f"Unknown interaction type: {interaction_type}")
+
+        self.emit_message("agent", "message", outputs)
+        return outputs
+
+    def _tool_callback(self, output, job_id=None, tool=None):
+        logger.info(f"Tool callback: job_id={job_id}, tool={tool.name if tool else None}")
+        self.emit_tool_stop(tool, job_id, StopMotive.Finished, output)
+
+        inputs = self.prep_inputs({"input": f"Tool {tool.name} with job_id {job_id} finished: {output}"})
+
+        self.queue.put_nowait(
+            Interaction(
+                priority=1,
+                interaction_type=InteractionType.Tool,
+                who=f"{tool.name}:{job_id}",
+                inputs=inputs,
+            )
+        )
+
+    def _tool_error_callback(self, exception, job_id=None, tool=None):
+        logger.error(f"Tool error callback: job_id={job_id}, tool={tool.name if tool else None}, error={exception}")
+        self.emit_tool_stop(tool, job_id, StopMotive.Error, str(exception))
+
+        inputs = self.prep_inputs({"input": f"Tool {tool.name} with job_id {job_id} failed: {exception}"})
+
+        self.queue.put_nowait(
+            Interaction(
+                priority=1,
+                interaction_type=InteractionType.Tool,
+                who=f"{tool.name}:{job_id}",
+                inputs=inputs,
+            )
+        )
+
+
+        #! Logging attempt end
+
+    def arun(self, *args, **kwargs) -> None:
+        raise NotImplementedError
+
+    def start(self) -> None:
+        self.manager = Manager()
+        self.global_context = self.manager.dict()
+        self.pool = Pool(
+            processes=self.processes,
+        )
+        self.thread = Thread(
+            target=self._main_thread,
+            daemon=True,
+        )
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.finished.set()
+        self.thread.join()
+
+        self.pool.close()
+        self.pool.join()
+
+    def reset(self) -> None:
+        pass
+
+    # NOTE: This is a decorator
+    def on_message(self, func: MessageCallback) -> MessageCallback:
+        @wraps(func)
+        def inner(*args, **kwargs):
+            return func(*args, **kwargs)
+
+        self.emitter.on("message", inner)
+        return inner
+
+    def emit_message(self, who: str, type: str, outputs: dict[str, Any]) -> None:
+        self.emitter.emit("message", who, type, outputs)
+
+    def emit_tool_start(
+        self,
+        tool: BaseParallelizableTool,
+        job_id: str,
+        input: Union[str, dict],
+    ) -> None:
+        self.running_jobs.add(job_id)
+
+        outputs = {"output": f"Tool {tool.name} with job_id {job_id} started"}
+
+        self.memory.chat_memory.add_ai_message(outputs["output"])
+
+        self.emit_message(
+            f"{tool.name}:{job_id}",
+            "start",
+            outputs,
+        )
+
+    def emit_tool_stop(
+        self,
+        tool: BaseParallelizableTool,
+        job_id: str,
+        motive: StopMotive,
+        output: str,
+    ) -> None:
+        self.running_jobs.remove(job_id)
+        match motive:
+            case StopMotive.Finished:
+                self.emit_message(f"{tool.name}:{job_id}", "finish", {"output": output})
+            case StopMotive.Error:
+                self.emit_message(
+                    f"{tool.name}:{job_id}",
+                    "error",
+                    {
+                        "output": f"Tool {tool.name} with job_id {job_id} failed: {output}"
+                    },
+                )
+            case _:
+                raise ValueError(f"Unknown stop motive {motive}")
+
+
+
+
+    def _start_tool(
+        self,
+        tool: BaseParallelizableTool,
+        agent_action: AgentActionWithId,
+        **tool_run_kwargs,
+    ) -> Any:
+        context = {
+            "job_id": agent_action.job_id,
+        }
+
+        self.pool.apply_async(
+            tool.invoke,
+            args=(
+                self.global_context,
+                context,
+                agent_action.tool_input,
+            ),
+            kwds=tool_run_kwargs,
+            callback=lambda _: self._tool_callback(
+                _,
+                job_id=agent_action.job_id,
+                tool=tool,
+            ),
+            error_callback=lambda _: self._tool_error_callback(
+                _,
+                job_id=agent_action.job_id,
+                tool=tool,
+            ),
+        )
+
+        self.emit_tool_start(
+            tool,
+            agent_action.job_id,
+            agent_action.tool_input,
+        )
+
+        return START_BACKGROUND_JOB.format(
+            tool_name=tool.name, job_id=agent_action.job_id
+        )
+
 
     def _call(
         self,

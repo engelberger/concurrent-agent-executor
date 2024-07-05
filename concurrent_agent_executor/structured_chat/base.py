@@ -225,7 +225,30 @@ class ConcurrentStructuredChatAgent(Agent):
     def _agent_type(self) -> str:
         raise ValueError
 
-    def plan(
+    def plan(self, intermediate_steps, callbacks=None, interaction_type=InteractionType.User, **kwargs):
+        logger.info(f"Planning next step: interaction_type={interaction_type}")
+        full_inputs = self.get_full_inputs(intermediate_steps, **kwargs)
+
+        try:
+            match interaction_type:
+                case InteractionType.User:
+                    full_output = self.llm_chain.predict(callbacks=callbacks, **full_inputs)
+                case InteractionType.Tool:
+                    full_output = self.system_llm_chain.predict(callbacks=callbacks, **full_inputs)
+                case InteractionType.Agent:
+                    logger.warning("InteractionType.Agent not implemented")
+                    raise NotImplementedError
+                case _:
+                    logger.error(f"Unknown interaction type: {interaction_type}")
+                    raise ValueError(f"Unknown interaction type: {interaction_type}")
+
+            logger.debug(f"LLM output: {full_output}")
+            return self.output_parser.parse(full_output)
+        except Exception as e:
+            logger.error(f"Error in plan: {e}", exc_info=True)
+            raise
+
+    def old_plan(
         self,
         intermediate_steps: List[Tuple[AgentAction, str]],
         callbacks: Callbacks = None,
